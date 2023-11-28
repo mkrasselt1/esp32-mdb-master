@@ -47,9 +47,7 @@ uint8_t mdbCoinChanger::coinEnable(uint16_t *toSend)
 #if CC_DEBG
     Serial.printf("\t[COIN] Coin Enable 0x0C\r\n");
 #endif
-    // Send Setup Message
-
-    //Todo: select coin channels to be accepted
+    // Todo: select coin channels to be accepted
     toSend[0] = CC_CMD_COIN_ACC;
     toSend[1] = 0xFF;
     toSend[2] = 0xFF;
@@ -63,7 +61,6 @@ uint8_t mdbCoinChanger::tubeStatus(uint16_t *toSend)
 #if CC_DEBG
     Serial.printf("\t[COIN] Tube Status 0x0A\r\n");
 #endif
-    // Send Setup Message
     toSend[0] = CC_CMD_TUBE_STATUS;
     return 1;
 }
@@ -73,7 +70,6 @@ uint8_t mdbCoinChanger::poll(uint16_t *toSend)
 #if CC_DEBG
     Serial.printf("\t[COIN] Poll 0x0B\r\n");
 #endif
-    // Send Setup Message
     toSend[0] = CC_CMD_POLL;
     return 1;
 }
@@ -164,7 +160,7 @@ uint8_t mdbCoinChanger::escrow(uint16_t *toSend)
                 return 2;
             }
         }
-        //no change coin left available
+        // no change coin left available
         state = CC_STATE_ACTIVE;
         coinPayOut = 0;
     }
@@ -182,8 +178,9 @@ uint16_t mdbCoinChanger::getCoinChannelValue(uint8_t chanel)
     {
         return 0;
     }
-    //Todo: maximum accepted Value inklusive Token)
-    if((scaleFactor * coinChannelValue[chanel]) > 200){
+    // Todo: maximum accepted Value inklusive Token)
+    if ((scaleFactor * coinChannelValue[chanel]) > 200)
+    {
         return 0;
     }
     return (uint16_t)scaleFactor * coinChannelValue[chanel];
@@ -206,7 +203,6 @@ uint8_t mdbCoinChanger::loop(uint16_t *toSend)
     // }
 #if CC_DEBG
     // Serial.printf("\t[COIN] Loop\r\n");
-    Serial.print(":");
 #endif
     
     switch (state)
@@ -311,7 +307,7 @@ void mdbCoinChanger::responseTube(uint8_t *received, uint8_t len)
     Serial.printf("\t[COIN] Tube Response: %d \r\n", state);
 #endif
     mdbDataRespCC_t frame;
-    memcpy(frame.raw, received, len-1);
+    memcpy(frame.raw, received, len - 1);
 #if CC_DEBG
     Serial.printf("\t[COIN] Tube 00-15 Full: \t\t%01X\t%01X\t%01X\t%01X\t%01X\t%01X\t%01X\t%01X\t%01X\t%01X\t%01X\t%01X\t%01X\t%01X\t%01X\t%01X \r\n",
                   frame.CoinChangerTubeStatus.CoinB00TubeFull,
@@ -379,7 +375,7 @@ void mdbCoinChanger::responsePoll(uint8_t *received, uint8_t len)
     Serial.printf("\t[COIN] Poll Response: %d \r\n", state);
 #endif
     mdbDataRespCC_t frame;
-    memcpy(frame.raw, received, len-1);
+    memcpy(frame.raw, received, len - 1);
     uint8_t activity = frame.CoinChangerPollResult.activity[0];
     if (activity == CC_MDB_ACK)
     {
@@ -526,7 +522,7 @@ void mdbCoinChanger::responseSetup(uint8_t *received, uint8_t len)
     Serial.printf("\t[COIN] Setup Response: %d \r\n", state);
 #endif
     mdbDataRespCC_t frame;
-    memcpy(frame.raw, received, len-1);
+    memcpy(frame.raw, received, len - 1);
     scaleFactor = frame.CoinChangerSetup.scaleFactor;
     featureLevel = frame.CoinChangerSetup.CoinChangerFeatureLvl;
     decimals = frame.CoinChangerSetup.decimalPlaces;
