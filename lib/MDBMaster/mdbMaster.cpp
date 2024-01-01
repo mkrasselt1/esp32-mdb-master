@@ -13,6 +13,7 @@ uint8_t mdbMaster::recLen = 0;
 
 uint32_t mdbMaster::coinFunds = 0;
 uint32_t mdbMaster::cashLessFunds = 0;
+uint32_t mdbMaster::billFunds = 0;
 MDB::MDBCommState mdbMaster::state = MDB::MDBCommState::IDLE;
 
 char mdbMaster::displayText[32] = {'\0'};
@@ -29,6 +30,7 @@ void mdbMaster::init()
     mdbDriver::start();
     mdbCoinChanger::init();
     mdbCashLess::init();
+    mdbBillValidator::init();
     mdbMaster::state = MDB::MDBCommState::IDLE;
 };
 
@@ -137,6 +139,14 @@ void mdbMaster::pollAll()
             mdbDriver::sendPacket(toSend, len);
         }
         break;
+        case MDB::ACTIVE_DEVICE::BILL_VALIDATOR:
+        {
+            uint16_t toSend[33];
+            uint16_t len = mdbBillValidator::loop(toSend);
+            mdbMaster::timeout = mdbBillValidator::timeout;
+            mdbDriver::sendPacket(toSend, len);
+        }
+        break;
         case MDB::ACTIVE_DEVICE::NONE:
             break;
         }
@@ -161,6 +171,14 @@ void mdbMaster::pollAll()
             {
                 dataReceived = false;
                 mdbCoinChanger::response(recFrame, recLen);
+                recLen = 0;
+                mdbMaster::activeDevice = MDB::ACTIVE_DEVICE::NONE;
+            }
+            break;
+            case MDB::ACTIVE_DEVICE::BILL_VALIDATOR:
+            {
+                dataReceived = false;
+                mdbBillValidator::response(recFrame, recLen);
                 recLen = 0;
                 mdbMaster::activeDevice = MDB::ACTIVE_DEVICE::NONE;
             }
@@ -191,6 +209,10 @@ void mdbMaster::pollAll()
         case MDB::ACTIVE_DEVICE::COIN_CHANGER:
             // Serial.println("timeout for active device");
             mdbCoinChanger::init();
+            break;
+        case MDB::ACTIVE_DEVICE::BILL_VALIDATOR:
+            // Serial.println("timeout for active device");
+            mdbBillValidator::init();
             break;
         case MDB::ACTIVE_DEVICE::NONE:
             break;
@@ -277,6 +299,14 @@ void mdbMaster::findNextPollDevice()
         timeout = 0;
         mdbMaster::state = MDB::MDBCommState::POLL;
     }
+    else if (mdbBillValidator::nextPoll <= millis())
+    {
+        mdbMaster::nextPoll = millis();
+        activeDevice = MDB::ACTIVE_DEVICE::BILL_VALIDATOR;
+        timeout = 0;
+        mdbMaster::state = MDB::MDBCommState::POLL;
+    }
+    
     else
     {
         mdbMaster::activeDevice = MDB::ACTIVE_DEVICE::NONE;

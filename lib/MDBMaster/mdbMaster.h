@@ -4,6 +4,7 @@
 #include "driver/mdbDriver.h"
 #include "device/coinChanger/coinChanger.h"
 #include "device/cashLessDevice/cashLess.h"
+#include "device/billValidator/billValidator.h"
 
 #define MDB_MASTER_VEND_APPROVE_RESULT_Expired 0
 #define MDB_MASTER_VEND_APPROVE_RESULT_Awaiting 1
@@ -19,7 +20,8 @@ namespace MDB{
     enum ACTIVE_DEVICE{
         NONE,
         CASHLESS,
-        COIN_CHANGER
+        COIN_CHANGER,
+        BILL_VALIDATOR
     };}
 class mdbMaster{
     public:
@@ -56,6 +58,8 @@ class mdbMaster{
         static uint32_t coinFunds;
 
         static uint32_t cashLessFunds;
+
+        static uint32_t billFunds;
 
         static uint8_t deviceResponse[40];
         static uint8_t deviceResponseLength;
