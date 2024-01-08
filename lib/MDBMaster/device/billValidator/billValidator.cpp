@@ -4,7 +4,8 @@ uint8_t mdbBillValidator::featureLevel = 0;
 uint8_t mdbBillValidator::decimals = 0;
 uint16_t mdbBillValidator::capacity = 0;
 uint8_t mdbBillValidator::billChannelValue[16] = {0};
-uint8_t mdbBillValidator::fakeCoins = 0;
+uint8_t mdbBillValidator::inhibit = 0;
+uint8_t mdbBillValidator::inhibitChanged = 0;
 uint8_t mdbBillValidator::escrowCapable = 0;
 uint16_t mdbBillValidator::billFunds = 0;
 uint16_t mdbBillValidator::billPayOut = 0;
@@ -49,12 +50,24 @@ uint8_t mdbBillValidator::billEnable(uint16_t *toSend)
 #if BV_DEBG
     Serial.printf("\t[BILL] Bill Enable 0x34\r\n");
 #endif
-    // Todo: select coin channels to be accepted
+    // enable 5-20
+    if (inhibit == 2)
+    {
+        inhibitChanged = 0;
+        toSend[0] = BV_CMD_BILL_TYPE;
+        toSend[1] = 0x00; // enable bill acceptance b15-b0 high to low value
+        toSend[2] = 0b00000111;
+        toSend[3] = 0x00; // enable bill escrow b15-b0 high to low value
+        toSend[4] = 0b00000111;
+        return 5;
+    }
+    // if (inhibit == 1) //disable
+    inhibitChanged = 0;
     toSend[0] = BV_CMD_BILL_TYPE;
-    toSend[1] = 0b11111111; // enable bill acceptance b15-b0 high to low value
-    toSend[2] = 0b11111111;
-    toSend[3] = 0b11111111; // enable bill escrow b15-b0 high to low value
-    toSend[4] = 0b11111111;
+    toSend[1] = 0x00; // enable bill acceptance b15-b0 high to low value
+    toSend[2] = 0x00;
+    toSend[3] = 0x00; // enable bill escrow b15-b0 high to low value
+    toSend[4] = 0x00;
     return 5;
 }
 
@@ -84,6 +97,12 @@ uint16_t mdbBillValidator::getFunds()
 void mdbBillValidator::setFunds(uint16_t newFunds)
 {
     billFunds = newFunds;
+}
+
+void mdbBillValidator::setInhibit(uint8_t newInhibit)
+{
+    inhibitChanged = true;
+    inhibit = newInhibit;
 }
 
 void mdbBillValidator::setPayOut(uint16_t payout)
@@ -141,33 +160,34 @@ uint8_t mdbBillValidator::escrow(uint16_t *toSend)
 #if BV_DEBG
     Serial.printf("\t[BILL] Escrow ID 0x35\r\n");
 #endif
-    if (billPayOut) {
-    //     for (int chanel = 0x0F; chanel >= 0; chanel--)
-    //     {
-    //         int channelValue = mdbBillValidator::getBillChannelValue(chanel);
-    //         int coinTubeAmount = stackLevel[chanel] - 2;
-    //         if (channelValue && billPayOut >= channelValue && coinTubeAmount > 2)
-    //         {
-    //             int amount = billPayOut / channelValue;
-    //             amount = min(coinTubeAmount, amount); // limit coin amount to tube content
-    //             amount = min(amount, 10);             // limit payout coin amount
-    //             stackLevel[chanel] -= amount;
-    //             billPayOut -= amount * channelValue;
-    //             Serial.printf("\t[BILL] Payout: %d Cent x %d Times\r\n", channelValue, amount);
-    //             Serial.printf("\t[BILL] Remaining Payout: %d\r\n", billPayOut);
-    //             // state = BV_STATE_ACTIVE;
-    //             toSend[0] = BV_CMD_DISPENSE;
-    //             toSend[1] = (amount << 4) | chanel;
-    //             return 2;
-    //         }
-    //     }
-    //     // no change coin left available
-    //     state = BV_STATE_ACTIVE;
+    if (billPayOut)
+    {
+        //     for (int chanel = 0x0F; chanel >= 0; chanel--)
+        //     {
+        //         int channelValue = mdbBillValidator::getBillChannelValue(chanel);
+        //         int coinTubeAmount = stackLevel[chanel] - 2;
+        //         if (channelValue && billPayOut >= channelValue && coinTubeAmount > 2)
+        //         {
+        //             int amount = billPayOut / channelValue;
+        //             amount = min(coinTubeAmount, amount); // limit coin amount to tube content
+        //             amount = min(amount, 10);             // limit payout coin amount
+        //             stackLevel[chanel] -= amount;
+        //             billPayOut -= amount * channelValue;
+        //             Serial.printf("\t[BILL] Payout: %d Cent x %d Times\r\n", channelValue, amount);
+        //             Serial.printf("\t[BILL] Remaining Payout: %d\r\n", billPayOut);
+        //             // state = BV_STATE_ACTIVE;
+        //             toSend[0] = BV_CMD_DISPENSE;
+        //             toSend[1] = (amount << 4) | chanel;
+        //             return 2;
+        //         }
+        //     }
+        //     // no change coin left available
+        //     state = BV_STATE_ACTIVE;
         billPayOut = 0;
         toSend[0] = BV_CMD_ESCROW;
         toSend[1] = BV_CMD_ESCROW_STACK;
         state = BV_STATE_ACTIVE;
-        //todo start timeout 
+        // todo start timeout
         return 2;
     }
     else
@@ -194,24 +214,16 @@ uint16_t mdbBillValidator::getBillChannelValue(uint8_t chanel)
 
 uint8_t mdbBillValidator::loop(uint16_t *toSend)
 {
-    mdbBillValidator::nextPoll = millis() + 100;
+    mdbBillValidator::nextPoll = millis() + 200;
     mdbBillValidator::timeout = millis() + 50;
     // if(mdbBillValidator::timeout){
     //     state = BV_STATE_MISSING;
     //     nextPoll += 10000;
     // }
 
-    // if (nextTubePoll <= millis() && state != BV_STATE_ESCROW && state != BV_STATE_MISSING)
-    // {
-    //     state = BV_STATE_TUBE_STATUS;
-    //     nextTubePoll += 2000;
-    // }
-
-    if (billFunds)
+    if (inhibitChanged)
     {
-        billPayOut = billFunds;
-        billFunds = 0;
-        state = BV_STATE_ESCROW;
+        state = BV_STATE_BILL_ENABLE;
     }
 
 #if BV_DEBG
@@ -335,7 +347,7 @@ void mdbBillValidator::responsePoll(uint8_t *received, uint8_t len)
     memcpy(frame.raw, received, len - 1);
     uint8_t activity = frame.billValidatorPollResult.activity[0];
     // if(len > 1 ) Serial.printf("\t[BILL] #Activities:%d\r\n", len);
-    
+
     for (uint8_t x = 0; x < len; x++)
     {
         activity = frame.billValidatorPollResult.activity[x];
@@ -347,14 +359,13 @@ void mdbBillValidator::responsePoll(uint8_t *received, uint8_t len)
                 state = BV_STATE_ESCROW;
             }
             return;
-        } else 
-        if (activity & 0x80)
+        }
+        else if (activity & 0x80)
         {
             Serial.println("\t[BILL] bill accepted");
             uint8_t type = activity & 0x0F;
             uint8_t routing = (frame.billValidatorPollResult.activity[x] & 0x70) >> 4;
             Serial.printf("\taccepted: %d bill, ", getBillChannelValue(type));
-            billFunds += getBillChannelValue(type);
             Serial.print(" bill deposited to ");
 
             switch (routing)
@@ -364,6 +375,7 @@ void mdbBillValidator::responsePoll(uint8_t *received, uint8_t len)
                 break;
             case 0b001:
                 Serial.println("ESCROW POSITION");
+                billFunds += getBillChannelValue(type);
                 break;
             case 0b010:
                 Serial.println("BILL RETURNED");
@@ -387,8 +399,9 @@ void mdbBillValidator::responsePoll(uint8_t *received, uint8_t len)
                 Serial.println("Unknown");
                 break;
             }
-        } 
-        else {
+        }
+        else
+        {
             switch (activity)
             {
             case 0b00000001:

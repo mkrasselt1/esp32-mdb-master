@@ -28,6 +28,7 @@ class mdbBillValidator{
         static uint16_t getFunds();
         static void setFunds(uint16_t);
         static void setPayOut(uint16_t);
+        static void setInhibit(uint8_t);
         static bool updateFunds(uint32_t *fundStore);
         static bool getPayOutChanged();
         static uint16_t scaleFactor;
@@ -35,7 +36,8 @@ class mdbBillValidator{
         static long timeout;
     private:
         static long nextTubePoll;
-        static uint8_t fakeCoins;
+        static uint8_t inhibit;
+        static uint8_t inhibitChanged;
         static uint8_t state;
         static uint8_t featureLevel;
         static uint8_t decimals;
