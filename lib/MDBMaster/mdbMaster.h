@@ -55,10 +55,6 @@ class mdbMaster{
         static uint8_t vendApproveResult;
         static bool dataReceived;
         
-        static uint32_t coinFunds;
-
-        static uint32_t cashLessFunds;
-
         static uint32_t billFunds;
 
         static uint8_t deviceResponse[40];

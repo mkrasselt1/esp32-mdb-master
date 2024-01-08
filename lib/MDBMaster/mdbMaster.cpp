@@ -11,8 +11,6 @@ uint8_t mdbMaster::deviceResponseLength = 0;
 uint8_t mdbMaster::recFrame[40] = {'\0'};
 uint8_t mdbMaster::recLen = 0;
 
-uint32_t mdbMaster::coinFunds = 0;
-uint32_t mdbMaster::cashLessFunds = 0;
 uint32_t mdbMaster::billFunds = 0;
 MDB::MDBCommState mdbMaster::state = MDB::MDBCommState::IDLE;
 
@@ -28,8 +26,6 @@ uint8_t mdbMaster::vendApproveResult = MDB_MASTER_VEND_APPROVE_RESULT_Expired;
 void mdbMaster::init()
 {
     mdbDriver::start();
-    mdbCoinChanger::init();
-    mdbCashLess::init();
     mdbBillValidator::init();
     mdbMaster::state = MDB::MDBCommState::IDLE;
 };
@@ -47,13 +43,11 @@ bool mdbMaster::isNewText()
 
 uint32_t mdbMaster::getFunds()
 {
-    if ((coinFunds || cashLessFunds) && (cashLessFunds != 0xFFFFFFFF))
+    if (billFunds)
     {
-        return coinFunds + cashLessFunds;
-    }
-    else if (!coinFunds && cashLessFunds == 0xFFFFFFFF)
-    {
-        return cashLessFunds;
+        mdbBillValidator::setFunds(0);
+        mdbBillValidator::setPayOut(1);
+        return billFunds;
     }
     return 0;
 }
@@ -123,31 +117,16 @@ void mdbMaster::pollAll()
     {
         switch (mdbMaster::activeDevice)
         {
-        case MDB::ACTIVE_DEVICE::COIN_CHANGER:
-        {
-            uint16_t toSend[33];
-            uint16_t len = mdbCoinChanger::loop(toSend);
-            mdbMaster::timeout = mdbCoinChanger::timeout;
-            mdbDriver::sendPacket(toSend, len);
-        }
-        break;
-        case MDB::ACTIVE_DEVICE::CASHLESS:
-        {
-            uint16_t toSend[33];
-            uint16_t len = mdbCashLess::loop(toSend);
-            mdbMaster::timeout = mdbCashLess::timeout;
-            mdbDriver::sendPacket(toSend, len);
-        }
-        break;
         case MDB::ACTIVE_DEVICE::BILL_VALIDATOR:
-        {
-            uint16_t toSend[33];
-            uint16_t len = mdbBillValidator::loop(toSend);
-            mdbMaster::timeout = mdbBillValidator::timeout;
-            mdbDriver::sendPacket(toSend, len);
-        }
-        break;
+            {
+                uint16_t toSend[33];
+                uint16_t len = mdbBillValidator::loop(toSend);
+                mdbMaster::timeout = mdbBillValidator::timeout;
+                mdbDriver::sendPacket(toSend, len);
+            }
+            break;
         case MDB::ACTIVE_DEVICE::NONE:
+        default:
             break;
         }
         mdbMaster::state = MDB::MDBCommState::WAIT;
@@ -159,22 +138,6 @@ void mdbMaster::pollAll()
         {
             switch (activeDevice)
             {
-            case MDB::ACTIVE_DEVICE::CASHLESS:
-            {
-                dataReceived = false;
-                mdbCashLess::response(recFrame, recLen);
-                recLen = 0;
-                mdbMaster::activeDevice = MDB::ACTIVE_DEVICE::NONE;
-            }
-            break;
-            case MDB::ACTIVE_DEVICE::COIN_CHANGER:
-            {
-                dataReceived = false;
-                mdbCoinChanger::response(recFrame, recLen);
-                recLen = 0;
-                mdbMaster::activeDevice = MDB::ACTIVE_DEVICE::NONE;
-            }
-            break;
             case MDB::ACTIVE_DEVICE::BILL_VALIDATOR:
             {
                 dataReceived = false;
@@ -202,14 +165,6 @@ void mdbMaster::pollAll()
     {
         switch (activeDevice)
         {
-        case MDB::ACTIVE_DEVICE::CASHLESS:
-            // Serial.println("timeout for active device");
-            mdbCashLess::init();
-            break;
-        case MDB::ACTIVE_DEVICE::COIN_CHANGER:
-            // Serial.println("timeout for active device");
-            mdbCoinChanger::init();
-            break;
         case MDB::ACTIVE_DEVICE::BILL_VALIDATOR:
             // Serial.println("timeout for active device");
             mdbBillValidator::init();
@@ -229,84 +184,19 @@ void mdbMaster::pollAll()
         displayTextShown = false;
     }
 
-    if (coinFunds > 0) // coin funds available
-    {
-        // invalidate unrealistic funds
-        if (coinFunds > 10000)
-        { // Todo: Maximum 100€
-            coinFunds = 0;
-        }
-        if (coinFunds && mdbCashLess::hasActiveSession() && mdbMaster::vendAuthDevice == MDB::ACTIVE_DEVICE::NONE)
-        {
-            mdbCashLess::setRevalue(coinFunds);
-            mdbCoinChanger::setFunds(0); // ToDO: eval revalue result denied/accept
-        }
-    }
-
-    if (mdbCashLess::hasActiveSession() && !sessionTimeout)
-    {
-        sessionTimeout = millis() + 25000;
-    }
-    if (mdbCashLess::hasActiveSession() && sessionTimeout<1000)
-    {
-        mdbCashLess::reqSessionComplete();
-        sessionTimeout = 0;
-    }
-    mdbCoinChanger::updateFunds(&coinFunds);
-    mdbCashLess::updateFunds(&cashLessFunds);
-    // mdbCashLess::updateRevalue(&cashLessFunds);
-
-    if (mdbMaster::vendApproveResult == MDB_MASTER_VEND_APPROVE_RESULT_Awaiting)
-    {
-        bool result = false;
-        if (mdbCashLess::hasApproved(&result))
-        {
-            if (result)
-            {
-                mdbMaster::vendApproveResult = MDB_MASTER_VEND_APPROVE_RESULT_Granted;
-                mdbMaster::vendAuthDevice = MDB::ACTIVE_DEVICE::CASHLESS;
-            }
-            else
-            {
-                if (coinFunds >= priceToApprove)
-                {
-                    mdbMaster::vendApproveResult = MDB_MASTER_VEND_APPROVE_RESULT_Granted;
-                    mdbMaster::vendAuthDevice = MDB::ACTIVE_DEVICE::COIN_CHANGER;
-                }
-                else
-                {
-                    mdbMaster::vendApproveResult = MDB_MASTER_VEND_APPROVE_RESULT_Deny;
-                    mdbMaster::vendAuthDevice = MDB::ACTIVE_DEVICE::NONE;
-                }
-            }
-        }
-    }
+    mdbBillValidator::updateFunds(&billFunds);
 };
 
 void mdbMaster::findNextPollDevice()
 {
-    if (mdbCashLess::nextPoll <= millis())
-    {
-        mdbMaster::nextPoll = millis();
-        activeDevice = MDB::ACTIVE_DEVICE::CASHLESS;
-        timeout = 0;
-        mdbMaster::state = MDB::MDBCommState::POLL;
-    }
-    else if (mdbCoinChanger::nextPoll <= millis())
-    {
-        mdbMaster::nextPoll = millis();
-        activeDevice = MDB::ACTIVE_DEVICE::COIN_CHANGER;
-        timeout = 0;
-        mdbMaster::state = MDB::MDBCommState::POLL;
-    }
-    else if (mdbBillValidator::nextPoll <= millis())
+    if (mdbBillValidator::nextPoll <= millis())
     {
         mdbMaster::nextPoll = millis();
         activeDevice = MDB::ACTIVE_DEVICE::BILL_VALIDATOR;
         timeout = 0;
         mdbMaster::state = MDB::MDBCommState::POLL;
     }
-    
+
     else
     {
         mdbMaster::activeDevice = MDB::ACTIVE_DEVICE::NONE;
@@ -323,10 +213,10 @@ void mdbMaster::updateScreen()
         cleanScreen = true;
     }
     // if funds available - show them
-    if (cleanScreen && (coinFunds || cashLessFunds))
+    if (cleanScreen && (billFunds))
     {
-        float euroCents = cashLessFunds + coinFunds;
-        // Serial.printf("---FUNDS %ld, %ld, %ld\r\n", cashLessFunds, coinFunds, cashLessFunds + coinFunds);
+        float euroCents = billFunds;
+        // Serial.printf("---FUNDS %ld, %ld, %ld, %ld\r\n", cashLessFunds, coinFunds, billFunds, cashLessFunds + coinFunds + billFunds);
         euroCents /= 100;
         sprintf(displayText, "Guthaben:       %.2f Euro      ", euroCents);
         mdbMaster::displayTimeout = millis() + 500;
@@ -339,20 +229,6 @@ void mdbMaster::finishedProduct()
     // which device has auth the sale ?
     switch (vendAuthDevice)
     {
-    case MDB::ACTIVE_DEVICE::CASHLESS:
-        // Serial.println("cashless:");
-        mdbCashLess::setVendSuccess();
-        mdbCashLess::reqSessionComplete();
-        break;
-    case MDB::ACTIVE_DEVICE::COIN_CHANGER:
-        // Serial.println("coins");
-        if (coinFunds > 0 && priceToApprove >= 0 && coinFunds >= priceToApprove)
-        {
-            coinFunds -= priceToApprove;
-            mdbCoinChanger::setFunds(coinFunds);
-        }
-        mdbCashLess::logCashSale(productToApprove, priceToApprove);
-        break;
     default:
         // Serial.println("none");
         mdbCashLess::reqSessionComplete();
@@ -365,13 +241,7 @@ void mdbMaster::start(){
 
 };
 
-void mdbMaster::setFund(uint16_t fund)
-{
-    if (fund >= 0)
-    {
-        cashLessFunds = fund;
-    }
-};
+void mdbMaster::setFund(uint16_t fund){};
 
 void mdbMaster::receive(uint16_t newByte)
 {
