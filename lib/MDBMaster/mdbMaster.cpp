@@ -1,377 +1,128 @@
 #include "mdbMaster.h"
 
-long mdbMaster::time = 0;
-long mdbMaster::timeout = 0;
-unsigned long mdbMaster::nextPoll = 0;
-bool mdbMaster::dataReceived = 0;
-MDB::ACTIVE_DEVICE mdbMaster::activeDevice = MDB::ACTIVE_DEVICE::NONE;
-MDB::ACTIVE_DEVICE mdbMaster::vendAuthDevice = MDB::ACTIVE_DEVICE::NONE;
+mdbCashLess MDBDevice_Cashless_1(MDB_CASHLESS_1);
+//mdbCashLess MDBDevice_Cashless_2(MDB_CASHLESS_2);
+
+universalSatelliteDevice MDBDevice_USD_1(MDB_UNI_SAT_DEV_1);
+universalSatelliteDevice MDBDevice_USD_2(MDB_UNI_SAT_DEV_2);
+universalSatelliteDevice MDBDevice_USD_3(MDB_UNI_SAT_DEV_3);
+
+coinChanger MDBDevice_Changer(MDB_CHANGER);
+
+
 uint8_t mdbMaster::deviceResponse[40] = {'\0'};
 uint8_t mdbMaster::deviceResponseLength = 0;
 uint8_t mdbMaster::recFrame[40] = {'\0'};
 uint8_t mdbMaster::recLen = 0;
+uint8_t mdbMaster::dataReceived = 0;
+mdbDevice* mdbMaster::devices[32] = {nullptr};
+mdbDevice* mdbMaster::currentDevice = nullptr;
 
-uint32_t mdbMaster::coinFunds = 0;
-uint32_t mdbMaster::cashLessFunds = 0;
-uint32_t mdbMaster::billFunds = 0;
-MDB::MDBCommState mdbMaster::state = MDB::MDBCommState::IDLE;
-
-char mdbMaster::displayText[32] = {'\0'};
-bool mdbMaster::displayTextShown = true;
-bool mdbMaster::cleanScreen = true;
-long mdbMaster::displayTimeout = 0;
-long mdbMaster::sessionTimeout = 0;
-uint16_t mdbMaster::productToApprove = 0;
-uint16_t mdbMaster::priceToApprove = 0;
-uint8_t mdbMaster::vendApproveResult = MDB_MASTER_VEND_APPROVE_RESULT_Expired;
+uint8_t mdbMaster::availableDevices = 0;
 
 void mdbMaster::init()
 {
     mdbDriver::start();
-    mdbCoinChanger::init();
-    mdbCashLess::init();
-    mdbBillValidator::init();
-    mdbMaster::state = MDB::MDBCommState::IDLE;
+    devices[0] = &MDBDevice_Cashless_1;
+    // devices[1] = &MDBDevice_Cashless_2;
+
+    devices[2] = &MDBDevice_USD_1;
+    devices[3] = &MDBDevice_USD_2;
+    devices[4] = &MDBDevice_USD_3;
+    
+    devices[5] = &MDBDevice_Changer;
+
+    MDBDevice_Changer.setActive();
+
+    MDBDevice_Cashless_1.setActive();
+    // MDBDevice_Cashless_2.setActive();
+
+    // MDBDevice_USD_1.setActive();
+    // MDBDevice_USD_2.setActive();
+    // MDBDevice_USD_3.setActive();
+
+    // for (size_t i = 0; i < 32; i++)
+    // {
+    //     devices[i] = new universalSatelliteDevice(i<<3);
+    //     devices[i]->setActive();
+    // }
+    
 };
 
-bool mdbMaster::isNewText()
+void mdbMaster::handleDevices()
 {
-    bool returnV = displayTextShown;
-    displayTextShown = true;
-    if (!returnV)
+    bool printDbg = false;
+    for (size_t i = 0; i < 32; i++)
     {
-        mdbMaster::cleanScreen = false;
-    }
-    return !returnV;
-}
+        dataReceived = 0;
+        if(devices[i]){
+            if(devices[i]->handle()){
+                currentDevice = devices[i];
+                mdbDriver::sendPacket(currentDevice->sendBuffer, currentDevice->sendLen);
+                
 
-uint32_t mdbMaster::getFunds()
-{
-    if ((coinFunds || cashLessFunds) && (cashLessFunds != 0xFFFFFFFF))
-    {
-        return coinFunds + cashLessFunds;
-    }
-    else if (!coinFunds && cashLessFunds == 0xFFFFFFFF)
-    {
-        return cashLessFunds;
-    }
-    return 0;
-}
+                while((!dataReceived) && (!currentDevice->responseTimeoutEllapsed()));
+                // printDbg = false;
+                // if((!dataReceived) || ((dataReceived) && recFrame[0] != 0x02)){
+                //     printDbg = true;
+                // }
 
-void mdbMaster::approve(uint16_t product, uint16_t price)
-{
-    // starts a authorisation process for the devices
-    mdbMaster::vendApproveResult = MDB_MASTER_VEND_APPROVE_RESULT_Awaiting;
-    mdbCashLess::setVendRequest(product, price);
-    mdbMaster::productToApprove = product;
-    mdbMaster::priceToApprove = price;
-}
-
-bool mdbMaster::expiredApproval()
-{
-    // check for non existing decision
-    return mdbMaster::vendApproveResult == MDB_MASTER_VEND_APPROVE_RESULT_Expired;
-}
-
-bool mdbMaster::hasApproved(bool *result)
-{
-    // find out if decision was made
-    switch (mdbMaster::vendApproveResult)
-    {
-    case MDB_MASTER_VEND_APPROVE_RESULT_Granted:
-        mdbMaster::vendApproveResult = MDB_MASTER_VEND_APPROVE_RESULT_Expired;
-        char temp[17];
-        sprintf(temp, "Produkt: %d", mdbMaster::productToApprove);
-        strcpy(&displayText[16], "Kauf erfolgreich");
-        displayTimeout = millis() + 15000;
-        displayTextShown = false;
-        *result = true;
-        return true;
-    case MDB_MASTER_VEND_APPROVE_RESULT_Deny:
-        mdbMaster::vendApproveResult = MDB_MASTER_VEND_APPROVE_RESULT_Expired;
-        sprintf(displayText, "Produkt: %d", mdbMaster::productToApprove);
-        sprintf(&displayText[16], "Preis: %.2f Euro", ((float)mdbMaster::priceToApprove) / 100);
-        displayTimeout = millis() + 15000;
-        displayTextShown = false;
-        *result = false;
-        return true;
-    case MDB_MASTER_VEND_APPROVE_RESULT_Awaiting:
-        return false;
-    default:
-        *result = false;
-        return false;
-    }
-    return false;
-}
-
-void mdbMaster::payOut(uint16_t payoutAmount)
-{
-    mdbCoinChanger::setPayOut(payoutAmount);
-}
-
-void mdbMaster::pollAll()
-{
-    mdbMaster::updateScreen();
-    switch (mdbMaster::state)
-    {
-    case MDB::MDBCommState::IDLE:
-    {
-        mdbMaster::findNextPollDevice();
-    }
-    break;
-    case MDB::MDBCommState::POLL:
-    {
-        switch (mdbMaster::activeDevice)
-        {
-        case MDB::ACTIVE_DEVICE::COIN_CHANGER:
-        {
-            uint16_t toSend[33];
-            uint16_t len = mdbCoinChanger::loop(toSend);
-            mdbMaster::timeout = mdbCoinChanger::timeout;
-            mdbDriver::sendPacket(toSend, len);
-        }
-        break;
-        case MDB::ACTIVE_DEVICE::CASHLESS:
-        {
-            uint16_t toSend[33];
-            uint16_t len = mdbCashLess::loop(toSend);
-            mdbMaster::timeout = mdbCashLess::timeout;
-            mdbDriver::sendPacket(toSend, len);
-        }
-        break;
-        case MDB::ACTIVE_DEVICE::BILL_VALIDATOR:
-        {
-            uint16_t toSend[33];
-            uint16_t len = mdbBillValidator::loop(toSend);
-            mdbMaster::timeout = mdbBillValidator::timeout;
-            mdbDriver::sendPacket(toSend, len);
-        }
-        break;
-        case MDB::ACTIVE_DEVICE::NONE:
-            break;
-        }
-        mdbMaster::state = MDB::MDBCommState::WAIT;
-    }
-    break;
-    case MDB::MDBCommState::WAIT:
-    {
-        if (dataReceived && timeout > 0)
-        {
-            switch (activeDevice)
-            {
-            case MDB::ACTIVE_DEVICE::CASHLESS:
-            {
-                dataReceived = false;
-                mdbCashLess::response(recFrame, recLen);
-                recLen = 0;
-                mdbMaster::activeDevice = MDB::ACTIVE_DEVICE::NONE;
-            }
-            break;
-            case MDB::ACTIVE_DEVICE::COIN_CHANGER:
-            {
-                dataReceived = false;
-                mdbCoinChanger::response(recFrame, recLen);
-                recLen = 0;
-                mdbMaster::activeDevice = MDB::ACTIVE_DEVICE::NONE;
-            }
-            break;
-            case MDB::ACTIVE_DEVICE::BILL_VALIDATOR:
-            {
-                dataReceived = false;
-                mdbBillValidator::response(recFrame, recLen);
-                recLen = 0;
-                mdbMaster::activeDevice = MDB::ACTIVE_DEVICE::NONE;
-            }
-            break;
-            default:
-            {
-                Serial.println("received data discarded");
-                dataReceived = false;
-            }
-            }
-            // Serial.println("SW to IDLE");
-            mdbMaster::state = MDB::MDBCommState::IDLE;
-        }
-        break;
-    }
-    default:
-        // Serial.println("SW to IDLE");
-        mdbMaster::state = MDB::MDBCommState::IDLE;
-    }
-    if (timeout > 0 && timeout <= millis() && activeDevice != MDB::ACTIVE_DEVICE::NONE)
-    {
-        switch (activeDevice)
-        {
-        case MDB::ACTIVE_DEVICE::CASHLESS:
-            // Serial.println("timeout for active device");
-            mdbCashLess::init();
-            break;
-        case MDB::ACTIVE_DEVICE::COIN_CHANGER:
-            // Serial.println("timeout for active device");
-            mdbCoinChanger::init();
-            break;
-        case MDB::ACTIVE_DEVICE::BILL_VALIDATOR:
-            // Serial.println("timeout for active device");
-            mdbBillValidator::init();
-            break;
-        case MDB::ACTIVE_DEVICE::NONE:
-            break;
-        }
-        // Serial.println("timeout for active device");
-        mdbMaster::activeDevice = MDB::ACTIVE_DEVICE::NONE;
-        mdbMaster::state = MDB::MDBCommState::IDLE;
-    }
-
-    if (mdbCashLess::displayRequestMessageAvailable())
-    {
-        memcpy(displayText, mdbCashLess::displayMessage, 32);
-        displayTimeout = millis() + (mdbCashLess::displayTimeout * 100);
-        displayTextShown = false;
-    }
-
-    if (coinFunds > 0) // coin funds available
-    {
-        // invalidate unrealistic funds
-        if (coinFunds > 10000)
-        { // Todo: Maximum 100€
-            coinFunds = 0;
-        }
-        if (coinFunds && mdbCashLess::hasActiveSession() && mdbMaster::vendAuthDevice == MDB::ACTIVE_DEVICE::NONE)
-        {
-            mdbCashLess::setRevalue(coinFunds);
-            mdbCoinChanger::setFunds(0); // ToDO: eval revalue result denied/accept
-        }
-    }
-
-    if (mdbCashLess::hasActiveSession() && !sessionTimeout)
-    {
-        sessionTimeout = millis() + 25000;
-    }
-    if (mdbCashLess::hasActiveSession() && sessionTimeout<1000)
-    {
-        mdbCashLess::reqSessionComplete();
-        sessionTimeout = 0;
-    }
-    mdbCoinChanger::updateFunds(&coinFunds);
-    mdbCashLess::updateFunds(&cashLessFunds);
-    // mdbCashLess::updateRevalue(&cashLessFunds);
-
-    if (mdbMaster::vendApproveResult == MDB_MASTER_VEND_APPROVE_RESULT_Awaiting)
-    {
-        bool result = false;
-        if (mdbCashLess::hasApproved(&result))
-        {
-            if (result)
-            {
-                mdbMaster::vendApproveResult = MDB_MASTER_VEND_APPROVE_RESULT_Granted;
-                mdbMaster::vendAuthDevice = MDB::ACTIVE_DEVICE::CASHLESS;
-            }
-            else
-            {
-                if (coinFunds >= priceToApprove)
-                {
-                    mdbMaster::vendApproveResult = MDB_MASTER_VEND_APPROVE_RESULT_Granted;
-                    mdbMaster::vendAuthDevice = MDB::ACTIVE_DEVICE::COIN_CHANGER;
+                if(printDbg){
+                    Serial.println();
+                    Serial.println(currentDevice->getDescriptor() ? currentDevice->getDescriptor()->Name : "UNKNOWN");
+                    Serial.print("[VMC -> Periph]: ");
+                    for (size_t i = 0; i < currentDevice->sendLen; i++)
+                    {
+                        Serial.printf("%02X ", currentDevice->sendBuffer[i]);
+                    }
+                    Serial.println();
                 }
-                else
-                {
-                    mdbMaster::vendApproveResult = MDB_MASTER_VEND_APPROVE_RESULT_Deny;
-                    mdbMaster::vendAuthDevice = MDB::ACTIVE_DEVICE::NONE;
+
+
+                if(!dataReceived){
+                    currentDevice->increaseErrorCounter();
+                    if(printDbg){
+                        Serial.println("[Periph -> VMC]: NO Response");
+                        Serial.println();
+                    }
+                    
+                }else{
+                    
+                    if(printDbg){
+                        Serial.print("[Periph -> VMC]:  ");
+                        for (size_t i = 0; i < recLen; i++)
+                        {
+                            Serial.printf("%02X ", recFrame[i]);
+                        }
+                        Serial.println();
+                    }            
+
+                    uint16_t errBefore = currentDevice->getErrorCounter();        
+                    currentDevice->handleResponse(recFrame, recLen);
+                    if(errBefore == currentDevice->getErrorCounter()){
+                        currentDevice->resetErrorCounter();
+                    }
                 }
+
+                if(devices[i]->isActive())
+                {
+                    availableDevices |= (1<<i);
+                }else{
+                    availableDevices &= ~(1<<i);
+                }
+
+                delay(100);
             }
         }
-    }
-};
-
-void mdbMaster::findNextPollDevice()
-{
-    if (mdbCashLess::nextPoll <= millis())
-    {
-        mdbMaster::nextPoll = millis();
-        activeDevice = MDB::ACTIVE_DEVICE::CASHLESS;
-        timeout = 0;
-        mdbMaster::state = MDB::MDBCommState::POLL;
-    }
-    else if (mdbCoinChanger::nextPoll <= millis())
-    {
-        mdbMaster::nextPoll = millis();
-        activeDevice = MDB::ACTIVE_DEVICE::COIN_CHANGER;
-        timeout = 0;
-        mdbMaster::state = MDB::MDBCommState::POLL;
-    }
-    else if (mdbBillValidator::nextPoll <= millis())
-    {
-        mdbMaster::nextPoll = millis();
-        activeDevice = MDB::ACTIVE_DEVICE::BILL_VALIDATOR;
-        timeout = 0;
-        mdbMaster::state = MDB::MDBCommState::POLL;
     }
     
-    else
-    {
-        mdbMaster::activeDevice = MDB::ACTIVE_DEVICE::NONE;
-    }
 }
 
-void mdbMaster::updateScreen()
-{
-    // Display Timeout Elapsed and Screen contains something
-    if (displayTimeout <= millis() && !cleanScreen)
-    {
-        strcpy(displayText, "                               ");
-        displayTextShown = false;
-        cleanScreen = true;
-    }
-    // if funds available - show them
-    if (cleanScreen && (coinFunds || cashLessFunds))
-    {
-        float euroCents = cashLessFunds + coinFunds;
-        // Serial.printf("---FUNDS %ld, %ld, %ld\r\n", cashLessFunds, coinFunds, cashLessFunds + coinFunds);
-        euroCents /= 100;
-        sprintf(displayText, "Guthaben:       %.2f Euro      ", euroCents);
-        mdbMaster::displayTimeout = millis() + 500;
-        displayTextShown = false;
-    }
-}
 
-void mdbMaster::finishedProduct()
-{
-    // which device has auth the sale ?
-    switch (vendAuthDevice)
-    {
-    case MDB::ACTIVE_DEVICE::CASHLESS:
-        // Serial.println("cashless:");
-        mdbCashLess::setVendSuccess();
-        mdbCashLess::reqSessionComplete();
-        break;
-    case MDB::ACTIVE_DEVICE::COIN_CHANGER:
-        // Serial.println("coins");
-        if (coinFunds > 0 && priceToApprove >= 0 && coinFunds >= priceToApprove)
-        {
-            coinFunds -= priceToApprove;
-            mdbCoinChanger::setFunds(coinFunds);
-        }
-        mdbCashLess::logCashSale(productToApprove, priceToApprove);
-        break;
-    default:
-        // Serial.println("none");
-        mdbCashLess::reqSessionComplete();
-        break;
-    }
-    vendAuthDevice = MDB::ACTIVE_DEVICE::NONE;
-}
-
-void mdbMaster::start(){
+void mdbMaster::startThread(){
 
 };
 
-void mdbMaster::setFund(uint16_t fund)
-{
-    if (fund >= 0)
-    {
-        cashLessFunds = fund;
-    }
-};
 
 void mdbMaster::receive(uint16_t newByte)
 {
@@ -399,7 +150,7 @@ void mdbMaster::receive(uint16_t newByte)
         {
             if (deviceResponseLength)
             { // send ack on longer messages
-                delay(5);
+                // delay(5);
                 mdbDriver::send(MDB_ACK);
             }
 
@@ -412,8 +163,11 @@ void mdbMaster::receive(uint16_t newByte)
             // checksum failed
             if (deviceResponseLength)
             { // send nack on longer messages
-                delay(5);
+                // delay(5);
                 mdbDriver::send(MDB_NACK);
+                if(currentDevice){
+                    currentDevice->increaseErrorCounter();
+                }
             }
         }
 

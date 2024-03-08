@@ -121,28 +121,10 @@ void mdbDriver::send(uint16_t data)
 
 void mdbDriver::sendPacket(uint16_t *toSend, uint16_t len)
 {
-  uint16_t s = 0x00, chkSum = 0x00;
   for (int i = 0; i < len; i++)
   {
-    s = toSend[i];
-    chkSum += s & 0xFF;
-
-    if (!i)
-    {
-      // First Byte with 9th bit 1
-      s |= 0x100;
-    }
-    mdbDriver::send(s);
+    mdbDriver::send(toSend[i]);
   }
-  mdbDriver::send(chkSum);
-
-  // Serial.print("TX: ");
-  // for (size_t i = 0; i < len; i++)
-  // {
-  //     Serial.printf("%02X ", toSend[i]);
-  // }
-  // Serial.printf("%02X ", chkSum);
-  // Serial.println();
 }
 
 void mdbDriver::swSerialTask(void *args)

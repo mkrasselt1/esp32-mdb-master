@@ -26,22 +26,11 @@
 #define MDB_VMC_SPECIFIC_1  0xF0
 #define MDB_VMC_SPECIFIC_2  0xF8
 
-#define NO_SUBCMD  -1
-struct mdbCommandDescriptor
-{
-    const char * Name;
-    uint8_t Cmd;
-    int16_t SubCmd;
-    uint8_t Lvl;
-    uint8_t Length;
-    uint8_t Action;
-};
 
 struct mdbDeviceDescriptor
 {
     const char * Name;
     uint8_t ID;
-    const mdbCommandDescriptor* CommandList;
 };
 
 

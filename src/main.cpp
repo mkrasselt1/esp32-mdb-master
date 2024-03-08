@@ -1,10 +1,26 @@
 #include <Arduino.h>
+#include <FS.h>
+#include "SPIFFS.h"
 #include <WiFi.h>
-#include <WiFiManager.h>
 // #include <RingBuf.h>
 #include <functional>
 #include <Wire.h>
-#include <LiquidCrystal_I2C.h>
+
+// OTA
+#include <ESPmDNS.h>
+#include <WiFiUdp.h>
+#include <ArduinoOTA.h>
+
+// telnet serial
+#define DEBUG_ON 1         // debug macros
+#define DEBUG_USE_SERIAL 1 // output channel serial
+#define DEBUG_USE_TELNET 1 // output channel telnet
+#include "ESPTelnet.h"
+ESPTelnet telnet;
+#define printCLI(x)  \
+  telnet.println(x); \
+  Serial.println(x)
+
 #include <HTTPUpdate.h>
 #include "mdbMaster.h"
 #include "time.h"
@@ -13,8 +29,16 @@
 #define ST(A) #A
 #define STR(A) ST(A)
 
-WiFiManager wm;
-LiquidCrystal_I2C lcd(0x27, 16, 2);  //16x2 LCD Display on I2C Adress 0x27
+// Include Library
+#include <SimpleCLI.h>
+
+// Create CLI Object
+SimpleCLI cli;
+
+// Commands
+Command sum;
+Command wifi;
+Command reboot;
 
 const char *ntpServer = "de.pool.ntp.org";
 const long gmtOffset_sec = 0;
@@ -23,190 +47,651 @@ const int daylightOffset_sec = 0;
 bool freeVend = 0;
 uint16_t prod = 0;
 uint32_t funds = 0;
+String input = "";
+uint8_t newByte = '\0';
 
+// MDB Function and Callback
+uint8_t dispenser = 0;
+mdbProduct getProduct(uint16_t productID)
+{
+  float price = 0;
+  String prodPrice = "80";
+  price = prodPrice.toFloat();
+  Serial.printf("Default Price is %.2f\r\n", price);
+
+  // Auswahl Preis nach Produkt
+  String prodName = "unbek.";
+  uint16_t numPrices = 0; //cfg_doc["price_list"].size();
+  Serial.printf("%d List entries\r\n", numPrices);
+  for (size_t i = 0; i < numPrices; i++)
+  {
+    if (0/*cfg_doc["price_list"][i]["Id"]*/ == productID)
+    {
+      printCLI("Price for Product");
+      prodName = "Produkt X";//cfg_doc["price_list"][i]["Name"].as<String>();
+      printCLI(prodName);
+      printCLI("is");
+      String prodPrice = "81";//cfg_doc["price_list"][i]["Price"];
+      price = prodPrice.toFloat();
+      printCLI(price);
+      break;
+    }
+  }
+
+  Serial.printf("Final Price is %.2f\r\n", price);
+  return mdbProduct(productID, prodName.c_str(), mdbCurrency(price, 1, 2));
+}
+
+class PInterface : public IPayment
+{
+private:
+  IPaymentDevice *sessionDev = nullptr;
+  mdbProduct myProduct;
+  uint32_t vendstart = 0;
+  std::vector<IPaymentDevice *> devicesWithFunds;
+  String number = "";
+
+  bool productSelect = false;
+  bool manualProduct = false;
+
+public:
+  float getTotalFunds()
+  {
+    float total = 0;
+    if (sessionDev)
+    {
+      total += sessionDev->getCurrentFunds().getValue();
+    }
+
+    for (auto const &rdev : devicesWithFunds)
+    {
+      total += rdev->getCurrentFunds().getValue();
+    }
+    return total;
+  }
+
+  float getMaxDevFunds()
+  {
+    float max = 0;
+    if (sessionDev)
+    {
+      if (sessionDev->getCurrentFunds().getValue() > max)
+        max = sessionDev->getCurrentFunds().getValue();
+    }
+
+    for (auto const &rdev : devicesWithFunds)
+    {
+      if (rdev->getCurrentFunds().getValue() > max)
+        max = rdev->getCurrentFunds().getValue();
+    }
+    return max;
+  }
+
+  void requestText(IPaymentDevice *dev, char *msg, uint32_t duration)
+  {
+    printCLI(msg);
+    Serial.printf("for %lums", duration);
+    printCLI(msg);
+  }
+
+  void requestRevalue(IPaymentDevice *dev)
+  {
+  }
+
+  bool startSession(IPaymentDevice *dev)
+  {
+    if (sessionDev)
+      return false;
+    Serial.print("Start Session Requested on ");
+    printCLI(dev->getDeviceName());
+    Serial.printf("\tFunds Available:  %.2f\r\n", dev->getCurrentFunds().getValue());
+    sessionDev = dev;
+    return true;
+  }
+
+  void endSession(IPaymentDevice *dev)
+  {
+    if (sessionDev)
+    {
+      productSelect = false;
+      number = "";
+      printCLI("End of Session");
+      sessionDev = nullptr;
+      manualProduct = false;
+    }
+  }
+
+  void fundsChanged(IPaymentDevice *dev)
+  {
+    // if the device has funds, we need to add to list
+    if (dev->getCurrentFunds().getValue() > 0)
+    {
+      if (std::find(devicesWithFunds.begin(), devicesWithFunds.end(), dev) == devicesWithFunds.end())
+      {
+        devicesWithFunds.push_back(dev);
+      }
+    }
+    else
+    {
+      // if the device has no funds, we need to remove from list
+      if (std::find(devicesWithFunds.begin(), devicesWithFunds.end(), dev) != devicesWithFunds.end())
+      {
+        devicesWithFunds.erase(std::find(devicesWithFunds.begin(), devicesWithFunds.end(), dev));
+      }
+    }
+
+    Serial.print("Funds changed on ");
+    printCLI(dev->getDeviceName());
+    Serial.printf("\tFunds Available:  %.2f\r\n", dev->getCurrentFunds().getValue());
+    float funds = getTotalFunds();
+  }
+
+  void vendAccepted(IPaymentDevice *dev, mdbCurrency c)
+  {
+    Serial.printf("Vend Accepted on %s for %.2f\r\n", dev->getDeviceName(), c.getValue());
+    vendstart = millis();
+    dispenser = myProduct.getNumber();
+  }
+
+  void vendDenied(IPaymentDevice *dev)
+  {
+    Serial.printf("Vend Denied on %s\r\n", dev->getDeviceName());
+  }
+
+  PaymentActions::Action update(IPaymentDevice *dev)
+  {
+    uint16_t prod = 0;
+
+    if (dev->pendingEscrowRequest())
+    {
+      return PaymentActions::REQUEST_REVALUE;
+    }
+    if (dev->getCurrentFunds().getValue() > 0)
+    {
+      // handle product selection
+      uint16_t prod = 0;
+      if (productSelect)
+      {
+        uint8_t requ_dispenser = 0;
+        switch (requ_dispenser)
+        {
+        case 1: // Peanuts
+          myProduct = mdbProduct(requ_dispenser, "Peanuts", mdbCurrency(0.20f, 1, 2));
+          break;
+
+        case 2: // Ritter Sport
+          myProduct = mdbProduct(requ_dispenser, "Ritter Sport", mdbCurrency(0.05f, 1, 2));
+          break;
+
+        case 3: // Smarties
+          myProduct = mdbProduct(requ_dispenser, "Smarties", mdbCurrency(0.10f, 1, 2));
+          break;
+
+        default:
+          break;
+        }
+
+        if ((requ_dispenser < 5) && (myProduct.getPrice()->getValue() <= dev->getCurrentFunds().getValue()))
+        {
+          Serial.printf("Requesting Product: %s on %s for %.2f\r\n", myProduct.getName(), dev->getDeviceName(), myProduct.getPrice()->getValue());
+          sessionDev = dev;
+          dispenser = requ_dispenser;
+          return PaymentActions::REQUEST_PRODUCT;
+        }
+        else
+        {
+          if (myProduct.getPrice()->getValue() >= dev->getCurrentFunds().getValue())
+          {
+            printCLI("Guthaben nicht ausreichend!");
+          }
+          dispenser = 0;
+
+          productSelect = false;
+          number = "";
+          printCLI("End of Session");
+          sessionDev = nullptr;
+          manualProduct = false;
+        }
+      }
+    }
+    return PaymentActions::NO_ACTION;
+  }
+
+  PaymentActions::Action updateSession(IPaymentDevice *dev)
+  {
+    if (dev == sessionDev)
+    {
+      // handle product selection
+      if (productSelect)
+      {
+        uint8_t requ_dispenser = 0;
+        switch (requ_dispenser)
+        {
+        case 1: // Peanuts
+          myProduct = mdbProduct(requ_dispenser, "Peanuts", mdbCurrency(0.20f, 1, 2));
+          break;
+
+        case 2: // Ritter Sport
+          myProduct = mdbProduct(requ_dispenser, "Ritter Sport", mdbCurrency(0.05f, 1, 2));
+          break;
+
+        case 3: // Smarties
+          myProduct = mdbProduct(requ_dispenser, "Smarties", mdbCurrency(0.10f, 1, 2));
+          break;
+
+        default:
+          break;
+        }
+        Serial.printf("Requesting Product: %s on %s for %.2f\r\n", myProduct.getName(), dev->getDeviceName(), myProduct.getPrice()->getValue());
+        return PaymentActions::REQUEST_PRODUCT;
+      }
+    }
+    else
+    {
+      // Check if Other payment devices have money to revalue
+      uint8_t foundDevices = 0;
+      for (auto const &rdev : devicesWithFunds)
+      {
+        Serial.printf("Funds: %.2f on %s\r\n", rdev->getCurrentFunds().getValue(), rdev->getDeviceName());
+        foundDevices++;
+      }
+
+      // revalue if we can, else vend
+      if (foundDevices && dev->canRevalue())
+      {
+        // revalue if we can
+        printCLI("Requesting Revalue");
+        return PaymentActions::REQUEST_REVALUE;
+      }
+    }
+    return PaymentActions::NO_ACTION;
+  }
+
+  PaymentActions::Action
+  updateDispense(IPaymentDevice *dev)
+  {
+    if (dev == sessionDev)
+    {
+      if (manualProduct)
+      {
+        // dispenser = 1;
+        if (millis() - vendstart > 1000)
+        {
+          dispenser = 0;
+          return PaymentActions::PRODUCT_DISPENSE_SUCCESS;
+        }
+      }
+    }
+    return PaymentActions::NO_ACTION;
+  }
+
+  mdbProduct *getCurrentProduct(IPaymentDevice *dev)
+  {
+    return &myProduct;
+  }
+
+  mdbCurrency getPendingRevalueAmount(IPaymentDevice *dev)
+  {
+    if (dev == sessionDev)
+    {
+      float total = 0;
+      for (auto const &rdev : devicesWithFunds)
+      {
+        total += rdev->getCurrentFunds().getValue();
+      }
+      return mdbCurrency(total, 1, 2);
+    }
+    else
+    {
+      return dev->getCurrentFunds();
+    }
+  }
+
+  void payoutEnd(IPaymentDevice *dev, bool success)
+  {
+    if (success)
+    {
+      printCLI("Auszahlung erfolgt!");
+      printCLI(getPendingRevalueAmount(dev).getValue());
+    }
+    else
+    {
+      printCLI("Kein Wechselgeld!");
+      printCLI(getPendingRevalueAmount(dev).getValue());
+    }
+  }
+
+  void revalueAccepted(IPaymentDevice *dev)
+  {
+    Serial.printf("%5.2f EUR aufgeladen!", getPendingRevalueAmount(dev).getValue());
+    printCLI("Revalue was accepted");
+    for (auto const &rdev : devicesWithFunds)
+    {
+      rdev->clearCurrentFunds();
+    }
+    devicesWithFunds.clear();
+  }
+
+  void revalueDenied(IPaymentDevice *dev)
+  {
+    printCLI("Revalue was denied");
+  }
+};
+
+PInterface myInterface;
 
 void MDBRUN(void *args)
 {
   // char tmp[30];
   mdbMaster::init();
+  MDBDevice_Cashless_1.registerPaymentInterface(&myInterface);
+  // MDBDevice_Cashless_2.registerPaymentInterface(&myInterface);
+  MDBDevice_Changer.registerPaymentInterface(&myInterface);
   while (1)
   {
-    mdbMaster::pollAll();
-    vTaskDelay(10);
+    mdbMaster::handleDevices();
+    delay(10);
   }
 }
 
-void lcdWrite(uint8_t col, uint8_t row, const char *text)
+// Callback function for sum command
+void sumCallback(cmd *c)
 {
-  char temp[(17 - col)];
-  int8_t textLen = strlen(text);
-  if (!textLen || textLen > 16)
+  Command cmd(c); // Create wrapper object
+
+  int argNum = cmd.countArgs(); // Get number of arguments
+  int sum = 0;
+
+  // Go through all arguments and add their value up
+  for (int i = 0; i < argNum; i++)
   {
-    textLen = 16;
+    Argument arg = cmd.getArg(i);
+    String argValue = arg.getValue();
+    int argIntValue = argValue.toInt();
+
+    if (argIntValue > 0)
+    {
+      if (i > 0)
+        Serial.print('+');
+      Serial.print(argIntValue);
+
+      sum += argIntValue;
+    }
   }
-  strcpy(temp, text);
-  for (uint8_t x = textLen; x < sizeof(temp) - 1; x++)
-  {
-    temp[x] = ' ';
-  }
-  temp[sizeof(temp) - 1] = '\0';
-  lcd.setCursor(col, row);
-  lcd.print(temp);
+
+  // Print result
+  Serial.print(" = ");
+  printCLI(sum);
 }
 
-void saveParamsCallback();
+void printWiFiStatus()
+{
+  switch (WiFi.status())
+  {
+  case WL_NO_SSID_AVAIL:
+    printCLI("[WiFi] SSID not found");
+    break;
+  case WL_CONNECT_FAILED:
+    Serial.print("[WiFi] Failed - WiFi not connected! Reason: ");
+    return;
+    break;
+  case WL_CONNECTION_LOST:
+    printCLI("[WiFi] Connection was lost");
+    break;
+  case WL_SCAN_COMPLETED:
+    printCLI("[WiFi] Scan is completed");
+    break;
+  case WL_DISCONNECTED:
+    printCLI("[WiFi] WiFi is disconnected");
+    break;
+  case WL_CONNECTED:
+    printCLI("[WiFi] WiFi is connected!");
+    Serial.print("[WiFi] IP address: ");
+    printCLI(WiFi.localIP());
+    break;
+  default:
+    Serial.print("[WiFi] WiFi Status: ");
+    printCLI(WiFi.status());
+    break;
+  }
+}
+
+// Callback function for wifi command
+void wifiCallback(cmd *c)
+{
+  Command cmd(c); // Create wrapper object
+  int numArgs = cmd.countArgs();
+  if (!numArgs)
+  {
+    printCLI("zu wenige Argumente");
+    return;
+  }
+  Argument argSubCmd = cmd.getArg(0);
+  String subCmd = argSubCmd.getValue();
+  if (!strcmp(subCmd.c_str(), "status"))
+  {
+    printWiFiStatus();
+  }
+  else if (!strcmp(subCmd.c_str(), "connect") && numArgs > 2)
+  {
+    WiFi.disconnect(false, true);
+    Argument argSSID = cmd.getArg(1);
+    String wiFiName = argSSID.getValue();
+
+    Argument argPw = cmd.getArg(2);
+    String wiFiPassword = argPw.getValue();
+
+    WiFi.begin(wiFiName.c_str(), wiFiPassword.c_str());
+    int tryDelay = 1000;
+    int numberOfTries = 10;
+
+    // Wait for the WiFi event
+    while (true)
+    {
+      printWiFiStatus();
+      if (WiFi.status() == WL_CONNECTED)
+      {
+        return;
+      }
+      delay(tryDelay);
+
+      if (numberOfTries <= 0)
+      {
+        Serial.print("[WiFi] Failed to connect to WiFi!");
+        // Use disconnect function to force stop trying to connect
+        WiFi.disconnect();
+        return;
+      }
+      else
+      {
+        numberOfTries--;
+      }
+    }
+  }
+  else if (!strcmp(subCmd.c_str(), "disconnect"))
+  {
+    WiFi.disconnect(false, true);
+  }
+}
+
+// Callback function for reboot command
+void rebootCallback(cmd *c)
+{
+  ESP.restart();
+}
+
+// Callback in case of an error
+void errorCallback(cmd_error *e)
+{
+  CommandError cmdError(e); // Create wrapper object
+
+  Serial.print("ERROR: ");
+  printCLI(cmdError.toString());
+
+  if (cmdError.hasCommand())
+  {
+    Serial.print("Did you mean \"");
+    Serial.print(cmdError.getCommand().toString());
+    printCLI("\"?");
+  }
+}
 
 void setup()
 {
-  delay(3000);
+  delay(1000);
   // Pins and Ports
   Serial.begin(115200);
   Wire.setPins(13, 14);
 
+  xTaskCreatePinnedToCore(MDBRUN, "MDB Master Runner", 2048, NULL, 1, NULL, 1);
+
+  // initialize SPIFFS and mount it on /spiffs
+  SPIFFS.begin(true, "/spiffs");
+  delay(3000);
   // Screen and Debug Output
   Serial.println("Booting");
   Serial.print("ESP-MDB-Master Interface vers.:");
   Serial.println(STR(CODE_VERSION));
 
-  Serial.print("ESP Board MAC Address:  ");
-  Serial.println(WiFi.macAddress());
+  // enable cli on serial port
+  cli.setOnError(errorCallback); // Set error Callback
+  sum = cli.addBoundlessCommand("sum", sumCallback);
+  wifi = cli.addBoundlessCommand("wifi", wifiCallback);
+  reboot = cli.addCommand("reboot", rebootCallback);
 
-  lcd.init(); // initialize the lcd
-  lcd.backlight();
-  lcd.clear();
+  // wifi connection
+  Serial.println("Verbinde WLAN");
+  WiFi.begin();
 
-  lcdWrite(0, 0, "VMC-Master");
-  lcdWrite(0, 1, "Booting");
+  ArduinoOTA
+      .onStart([]()
+               {
+      String type;
+      if (ArduinoOTA.getCommand() == U_FLASH)
+        type = "sketch";
+      else // U_SPIFFS
+        type = "filesystem";
 
-  IPAddress IP;
+      // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
+      Serial.println("Start updating " + type); })
+      .onEnd([]()
+             { Serial.println("\nEnd"); })
+      .onProgress([](unsigned int progress, unsigned int total)
+                  { Serial.printf("Progress: %u%%\r", (progress / (total / 100))); })
+      .onError([](ota_error_t error)
+               {
+      Serial.printf("Error[%u]: ", error);
+      if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+      else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+      else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+      else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+      else if (error == OTA_END_ERROR) Serial.println("End Failed"); });
 
-  WiFi.mode(WIFI_STA);
-  WiFi.setHostname("ESP-MDB-Master");
+  ArduinoOTA.begin();
 
-  // wm.resetSettings(); // reset the settings for testing
+  // telnet setup
+  telnet.onConnect([](String ip)
+                   {
+  Serial.print("- Telnet: ");
+  Serial.print(ip);
+  Serial.println(" connected");
   
-  wm.setConfigPortalBlocking(false);
-  wm.setSaveParamsCallback(saveParamsCallback);
+  telnet.println("\nWelcome " + telnet.getIP());
+  telnet.println("(Use ^] + q  to disconnect.)"); });
+  telnet.onConnectionAttempt([](String ip)
+                             {
+  Serial.print("- Telnet: ");
+  Serial.print(ip);
+  Serial.println(" tried to connected"); });
+  telnet.onReconnect([](String ip)
+                     {
+  Serial.print("- Telnet: ");
+  Serial.print(ip);
+  Serial.println(" reconnected"); });
+  telnet.onDisconnect([](String ip)
+                      {
+  Serial.print("- Telnet: ");
+  Serial.print(ip);
+  Serial.println(" disconnected"); });
+  telnet.onInputReceived([](String str)
+                         {
+    // checks for a certain command
+    if (str == "quit")
+    {
+      telnet.println("> disconnecting you...");
+      telnet.disconnectClient();
+    }
+    else
+    {
+      //let cli parse it
+      telnet.print("telnet input: \"");
+      telnet.print(str.c_str());
+      telnet.println("\"");
+      cli.parse(str);
+      char tmp[300] = "";
+      tmp[0] = '\0';
+      strcpy(tmp, str.c_str());
+      strcat(tmp, "\r\n");
+      printCLI(str);
+    } });
 
-  bool res;
-  Serial.print("Verbinde WLAN");
-  lcdWrite(0, 0, "Verbinde WLAN");
-
-  res = wm.autoConnect("ESP-MDB-Master", WiFi.macAddress().c_str());
-  
-  if (!res)
+  DEBUG_INFO;
+  Serial.print("- Telnet: ");
+  if (telnet.begin(23))
   {
-    Serial.println("Konfigurationsportal läuft");
-    lcdWrite(0, 0, "Konfigurations-");
-    lcdWrite(0, 1, "Oberfläche aktiv");
-    // ESP.restart();
-  }
-  else
-  {
-    // if you get here you have connected to the WiFi
-    Serial.println("verbunden");
-    IP = WiFi.localIP();
-    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+    Serial.println("telent running");
   }
 
-  Serial.print("IP address: ");
-  Serial.println(IP);
-  lcdWrite(0, 0, "IP-Adresse:");
-  lcdWrite(0, 1, IP.toString().c_str());
-  xTaskCreatePinnedToCore(MDBRUN, "MDB Master Runner", 2048, NULL, 1, NULL, 1);
+  printCLI(WiFi.localIP().toString());
+  // DEBUG_WHERE;
+  // DEBUG_MSG("Prints debug string");
+  // DEBUG_VAR(a);
 }
-
 
 void loop()
 {
-  wm.process(); // for wifi manager
+  // mimic Serial Console
   if (Serial.available())
   {
-    switch (Serial.read())
+    newByte = Serial.read();
+
+    if (newByte == '\n')
     {
-    case 'r':
-      ESP.restart();
-      break;
-    case 'e':
-      mdbCashLess::reqSessionComplete();
-      break;
-    case '1':
-      prod = 1;
-      break;
-    case '2':
-      prod = 2;
-      break;
+      Serial.println();
+      cli.parse(input);
+
+      input = ""; // reset
+      Serial.print("#");
+    }
+    else if (newByte != '\r')
+    {
+      input += (char)newByte;
+      Serial.print((char)newByte);
     }
   }
-  
-  if (mdbMaster::isNewText()) //show mdb text to screen 
+  if (cli.errored())
   {
-    char tempBuff[21];
+    CommandError cmdError = cli.getError();
 
-    lcdWrite(0, 0, "");
-    lcdWrite(0, 1, "");
+    printCLI("ERROR: ");
+    printCLI(cmdError.toString());
 
-    memcpy(tempBuff, mdbMaster::displayText, 16);
-    lcdWrite(0, 0, tempBuff);
-
-    memcpy(tempBuff, &mdbMaster::displayText[16], 16);
-    lcdWrite(0, 1, tempBuff);
-  }
-
-  // only if product request is pending
-  if (prod)
-  {
-    uint16_t price = 100; //default price is independent from product selection
-    Serial.printf("Default Price is %d\r\n", price);
-
-
-    // only if there is no approval ongoing
-    if (mdbMaster::expiredApproval())
+    if (cmdError.hasCommand())
     {
-      Serial.printf("MDB->Approve Prod. %d / Price %d\r\n", prod, price);
-      mdbMaster::approve(prod, price);
-    }
-    bool result = false;
-    // master has approved ?
-    if (mdbMaster::hasApproved(&result))
-    {
-      prod = 0; // delete manual vend request
-      if (result)
-      {
-        Serial.println("MDB->has approved");
-        Serial.println("Kauf erfolgreich");
-        //Todo: do something for the money now
-      }
-      else
-      {
-        Serial.println("MDB->has denied");
-        char temp[32];
-        sprintf(temp, "Produkt: %2d Preis: %.2f Euro", prod, ((float)price) / 100);
-        Serial.println(temp);
-      }
+      printCLI("Did you mean \"");
+      printCLI(cmdError.getCommand().toString());
+      printCLI("\"?");
     }
   }
 
-  // check for end of vend session end - not yet signaling vend errors :/
-  if (true)
-  {
-    mdbMaster::finishedProduct();
-  }
+  // if (WiFi.status() == WL_CONNECTED)
+  // {
+  //   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  //   return;
+  // }
 
-  // example for handling changed funds
-  if (funds != mdbMaster::getFunds())
-  {
-    funds = mdbMaster::getFunds();
-    char temp[17];
-    sprintf(temp, "Kredit: %.2f Euro", ((float)funds) / 100);
-    Serial.println(temp);
-  }
-
-  delay(20);
-}
-
-void saveParamsCallback()
-{
-  Serial.println("Get Params:");
-  //Todo: save optional parameters
+  // Handle OTA packets
+  ArduinoOTA.handle();
+  // handle telnet packets
+  telnet.loop();
 }

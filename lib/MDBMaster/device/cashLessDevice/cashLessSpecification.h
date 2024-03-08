@@ -4,66 +4,11 @@
 #ifndef CASHLESS_SPEC_H
 #define CASHLESS_SPEC_H
 
-#include "../../mdbStructure.h"
 
 // Cashless  Command set
-#define CL_CMD_RESET 0x10
-#define CL_CMD_SETUP 0x11
-#define CL_CMD_SETUP_DATA 0x00
-#define CL_CMD_SETUP_PRICES 0x01
-#define CL_CMD_POLL 0x12
-#define CL_CMD_VEND 0x13
-#define CL_CMD_VEND_REQUEST 0x00
-#define CL_CMD_VEND_CANCEL 0x01
-#define CL_CMD_VEND_SUCCESS 0x02
-#define CL_CMD_VEND_FAILURE 0x03
-#define CL_CMD_VEND_SESSION_COM 0x04
-#define CL_CMD_VEND_CASH_SALE 0x05
-#define CL_CMD_VEND_NEG_VEND 0x06
-#define CL_CMD_READER 0x14
-#define CL_CMD_READER_DISABLE 0x00
-#define CL_CMD_READER_ENABLE 0x01
-#define CL_CMD_READER_CANCEL 0x02
-#define CL_CMD_READER_DATA_E_RE 0x03
 
-#define CL_CMD_REVALUE 0x15
-#define CL_CMD_REVALUE_REQ 0x00
-#define CL_CMD_REVALUE_LIMIT 0x01
-
-#define CL_CMD_EXPANS 0x17
-#define CL_CMD_EXPANS_ID 0x00
-#define CL_CMD_EXPANS_RE_USERF 0x01
-#define CL_CMD_EXPANS_WR_USERF 0x02
-#define CL_CMD_EXPANS_WR_TIME 0x03
-#define CL_CMD_EXPANS_FEAT_EN 0x04
-#define CL_CMD_EXPANS_REQ2REC 0xFA
-#define CL_CMD_EXPANS_RETRY_DEN 0xFB
-#define CL_CMD_EXPANS_SEND_BLK 0xFC
-#define CL_CMD_EXPANS_OK2SEND 0xFD
-#define CL_CMD_EXPANS_REQ2SEND 0xFE
-
-#define CL_CMD_EXPANS_DIAG 0xFF
-
-#define CL_CMD_NOT_IMPLEMENTED 0xFF
-
-// Coin Changer Response set
-#define CL_RESP_JUST_RESET 0x00
-
-#define CL_MDB_ACK 0x00
-#define CL_MDB_NACK 0xFF
-
-const mdbCommandDescriptor cashLessCommands[]{
-    //---CMD Name-------------------CMD---SubCMD--------Lvl-----Len--Action
-    {"Reset", 0x00, NO_SUBCMD, 1, 1, CL_CMD_RESET},
-    // {"Setup",                       0x01, NO_SUBCMD,    2,      23, CL_CMD_SETUP_CFG},
-    // {"Tube Status",                 0x02, NO_SUBCMD,    2,      18, CL_CMD_TUBE_STATUS},
-    // {"Poll",                        0x03, NO_SUBCMD,    2,      16, CL_CMD_POLL},
-    // {"Coin Type",                   0x04, NO_SUBCMD,    2,      4,  CL_CMD_COIN_ACL},
-    // {"Dispense",                    0x05, NO_SUBCMD,    2,      1,  CL_CMD_DISPENSE},
-    // {"Expansion Id",                0x06, 0x00,         3,      1,  CL_CMD_EXPANS_ID},
-    // {"Expansion Feat",              0x06, 0x01,         3,      1,  CL_CMD_EXPANS_FEAT_E},
-    // {"Expansion Debug",             0x06, 0x02,         3,      1,  CL_CMD_EXPANS_DEBUG},
-    {"EOL", 0x00, 0x00, 0, 0, CL_CMD_NOT_IMPLEMENTED}};
+#define CL_RESP_ACK 0x00
+#define CL_RESP_NACK 0xFF
 
 typedef union __attribute__((packed)) mdbDataRespCL_t
 {
@@ -71,177 +16,192 @@ typedef union __attribute__((packed)) mdbDataRespCL_t
 
     struct __attribute__((packed))
     {
-#define CL_RESP_READER_CONFIG 0x01
-        uint8_t ConfigData;
-        uint8_t featureLevel;
-        uint8_t countryCodeHigh;
-        uint8_t countryCodeLow;
-        uint8_t scaleFactor;
-        uint8_t decimalPlaces;
-        uint8_t appMaxResponseTime;
-        uint8_t Option7Unused : 1;
-        uint8_t Option6Unused : 1;
-        uint8_t Option5Unused : 1;
-        uint8_t Option4Unused : 1;
-        uint8_t Option3FundRestore : 1;
-        uint8_t Option2MultivendCapable : 1;
-        uint8_t Option1ReaderDisplay : 1;
-        uint8_t Option0CashSale : 1;
+        uint8_t cmd;
+        union __attribute__((packed))
+        {
+            #define CL_RESP_JUST_RESET 0x00
 
-    } CashLessSetup;
+            #define CL_RESP_READER_CONFIG 0x01
+            struct __attribute__((packed))
+            {        
+                uint8_t ReaderFeatureLevel;
+                uint8_t CountryCodeHigh;
+                uint8_t CountryCodeLow;
+                uint8_t ScaleFactor;
+                uint8_t DecimalPlaces;
+                uint8_t AppMaxResponseTime;
+                
+                uint8_t Option0_CanRestoreFunds : 1;                
+                uint8_t Option1_CanMultivend : 1;
+                uint8_t Option2_HasOwnDisplay : 1;
+                uint8_t Option3_CanCashsale : 1;
+                uint8_t Option4_7_Unused : 4;
 
-    // struct __attribute__((packed))
-    // {
-    //     #define CL_RESP_CONFIG_PRICES 0x01
-    //     uint16_t MaxPrice;
-    //     uint16_t MinPrice;
-    // } CashLessMaxMinPrice;
+            } ReaderConfigData;
 
-    // struct __attribute__((packed))
-    // {
-    //     uint32_t MaxPrice;
-    //     uint32_t MinPrice;
-    //     uint16_t CurrencyCode;
-    // } CashLessLvl3MaxMinPrice;
+            #define CL_RESP_DISPLAY_REQ 0x02
+            struct __attribute__((packed))
+            {
+                uint8_t DisplayTime;
+                char DisplayData[32];
+            } DisplayRequest;
 
-    struct __attribute__((packed))
-    {
-#define CL_RESP_DISP_REQ 0x02
-        uint8_t DispRequ;
-        uint8_t DisplayTime;
-        char DisplayMessage[32];
-    } CashLessDisplayRequest;
+            #define CL_RESP_BEGIN_SESSION 0x03
+            #define CL_RESP_BEGIN_SESSION_LEN_LVL1 3
+            #define CL_RESP_BEGIN_SESSION_LEN_LVL23 10
+            #define CL_RESP_BEGIN_SESSION_LEN_LVL3_EXP 17
+            struct __attribute__((packed))
+            {
+                uint16_t FundsAvailable;
+                uint32_t PaymentMediaID;
+                uint8_t PaymentType;
+                uint16_t PaymentData;
+            } BeginSession;
 
-    struct __attribute__((packed))
-    {
-#define CL_RESP_BEGIN_SESSION 0x03
-        uint8_t BeginSession;
-        uint8_t fundsLB;
-        uint8_t fundsHB;
-    } CashLessBeginnSession;
+            #define CL_RESP_SESSION_CANCEL_REQ 0x04
 
-    struct __attribute__((packed))
-    {
-#define CL_RESP_REVALUE_LIMIT 0x0F
-        uint8_t RevalueLimit;
-        uint8_t limitLB;
-        uint8_t limitHB;
-    } CashLessRevalueLimit;
+            #define CL_RESP_VEND_APPROVED 0x05
+            #define CL_RESP_VEND_APPROVED_LEN 3
+            #define CL_RESP_VEND_APPROVED_LEN_LVL3_EXP 5
+            struct __attribute__((packed))
+            {
+                uint16_t VendAmount;
+            } VendApproved;
+            #define CL_RESP_VEND_DENIED 0x06
+            #define CL_RESP_END_SESSION 0x07
 
-    struct __attribute__((packed))
-    {
-#define CL_RESP_REVALUE_LIMIT 0x0F
-        uint8_t RevalueLimit;
-        uint8_t limitLB;
-        uint8_t limitMLB;
-        uint8_t limitMHB;
-        uint8_t limitHB;
-    } CashLessRevalueLimitExpCurrency;
-    struct __attribute__((packed))
-    {
-#define CL_RESP_BEGIN_SESSION 0x03
-        uint8_t BeginSession;
-        uint16_t funds;
-        uint8_t paymentMediaId[4];
-        uint8_t paymentType;
-        uint16_t paymentData;
-    } CashLessLvl3BeginnSession;
 
-    struct __attribute__((packed))
-    {
-#define CL_RESP_BEGIN_SESSION 0x03
-        uint8_t BeginSession;
-        uint16_t funds;
-        uint8_t paymentMediaId[4];
-        uint8_t paymentType;
-        uint16_t paymentData;
-        uint16_t userLanguage;
-        uint16_t UserCurrency;
-        uint8_t CardOptions;
-    } CashLessLvl3BeginnSessionExpandedCurrency;
+            #define CL_RESP_PERIPHERAL_ID 0x09
+            struct __attribute__((packed))
+            {
+                char ManufacturerCode[3];
+                char SerialNumber[12];
+                char ModelNumber[12];
+                uint16_t SoftwareVersion;
+                uint32_t OptionalFeatureBitsPad : 24;                   //[0]::0 - [2]::7
+                uint8_t OptionalFeatureBits_CanFTL : 1;                 //[3]::0
+                uint8_t OptionalFeatureBits_MonetaryFormat : 1;         //[3]::1
+                uint8_t OptionalFeatureBits_CanMultiCurrency : 1;       //[3]::2
+                uint8_t OptionalFeatureBits_CanNegativeVend : 1;        //[3]::3
+                uint8_t OptionalFeatureBits_CanDataEntry : 1;           //[3]::4
+                uint8_t OptionalFeatureBits_CanAlwaysIdle : 1;          //[3]::5
 
-#define CL_RESP_SESSION_CANCEL 0x04
+            } PeripheralID;
 
-#define CL_RESP_VEND_APPROVED 0x05
-    struct __attribute__((packed))
-    {
-        uint8_t VendApproved;
-        uint16_t amount;
-    } CashLessVendApproved;
+            #define CL_RESP_REVALUE_APPROVED 0x0D
+            #define CL_RESP_REVALUE_DENIED   0x0E
+            #define CL_RESP_REVALUE_LIMIT    0x0F
+            #define CL_RESP_REVALUE_LIMIT_AMOUNT_LEN 3
+            struct __attribute__((packed))
+            {
+                uint16_t RevalueAmount;
+            } RevalueLimit;
 
-    struct __attribute__((packed))
-    {
-        uint8_t VendApproved;
-        uint32_t amount;
-    } CashLessLvl3VendApprovedExpandedCurrency;
+        };
+    };
 
-#define CL_RESP_VEND_DENIED 0x06
-
-#define CL_RESP_END_SESSION 0x07
-
-#define CL_RESP_CANCELED 0x08
-
-#define CL_RESP_EXPANSION_ID 0x09
-    struct __attribute__((packed))
-    {
-        uint8_t ExpansionId;
-        char manufacturer[3];
-        char serialNumber[12];
-        char model[12];
-        uint8_t softwareVersionHighByte;
-        uint8_t softwareVersionLowByte;
-    } CashLessExpansionID;
-
-#define CL_RESP_REVALUE_APPROVED 0x0D
-#define CL_RESP_REVALUE_DENIED 0x0E
-
-    struct __attribute__((packed))
-    {
-        uint8_t ExpansionId;
-        char manufacturer[4];
-        char serialNumber[12];
-        char model[12];
-        uint8_t softwareVersionHighByte;
-        uint8_t softwareVersionLowByte;
-        uint8_t OptFeature31 : 1;
-        uint8_t OptFeature30 : 1;
-        uint8_t OptFeature29 : 1;
-        uint8_t OptFeature28 : 1;
-        uint8_t OptFeature27 : 1;
-        uint8_t OptFeature26 : 1;
-        uint8_t OptFeature25 : 1;
-        uint8_t OptFeature24 : 1;
-        uint8_t OptFeature23 : 1;
-        uint8_t OptFeature22 : 1;
-        uint8_t OptFeature21 : 1;
-        uint8_t OptFeature20 : 1;
-        uint8_t OptFeature19 : 1;
-        uint8_t OptFeature18 : 1;
-        uint8_t OptFeature17 : 1;
-        uint8_t OptFeature16 : 1;
-        uint8_t OptFeature15 : 1;
-        uint8_t OptFeature14 : 1;
-        uint8_t OptFeature13 : 1;
-        uint8_t OptFeature12 : 1;
-        uint8_t OptFeature11 : 1;
-        uint8_t OptFeature10 : 1;
-        uint8_t OptFeature09 : 1;
-        uint8_t OptFeature08 : 1;
-        uint8_t OptFeature07 : 1;
-        uint8_t OptFeature06 : 1;
-        uint8_t OptFeature05AlwaysIdle : 1;
-        uint8_t OptFeature04DataEntry : 1;
-        uint8_t OptFeature03NegativeVend : 1;
-        uint8_t OptFeature02MultiCurrency : 1;
-        uint8_t OptFeature01FourByteNumbers : 1;
-        uint8_t OptFeature00FileTransferLayer : 1;
-    } CashLessLvl3ExpansionID;
-
-#define CL_RESP_DATA_ENTRY_CANCEL 0x13
-
-    struct __attribute__((packed))
-    {
-        uint8_t activity[16];
-    } CashLessPollResult;
 } CashLessDataResponse;
+
+typedef union __attribute__((packed)) mdbDataRequCL_t
+{
+    uint8_t raw[36];
+
+    struct __attribute__((packed))
+    {
+        uint8_t cmd;
+        uint8_t sub;
+
+        union __attribute__((packed))
+        {
+            #define CL_REQU_CMD_RESET           0x00
+            #define CL_REQU_CMD_RESET_LEN       1
+
+            #define CL_REQU_CMD_SETUP           0x01
+            #define CL_REQU_SUB_SETUP_CFG       0x00
+            #define CL_REQU_CMD_SETUP_CFG_LEN   6
+            struct __attribute__((packed))
+            {
+                uint8_t VMCFeatureLevel;
+                uint8_t ColumnsOnDisplay;
+                uint8_t RowsOnDisplay;
+                uint8_t DisplayInformation;
+            } SetupConfigData;
+
+            #define CL_REQU_SUB_SETUP_MAXMIN       0x01
+            #define CL_REQU_CMD_SETUP_MAXMIN_LEN   6
+            struct __attribute__((packed))
+            {
+                uint16_t MaximumPrice;
+                uint16_t MinimumPrice;
+            } SetupConfigMaxMinPrices;
+
+
+
+
+            #define CL_REQU_CMD_EXPANSION           0x07
+            #define CL_REQU_SUB_EXPANSION_ID        0x00
+            #define CL_REQU_CMD_EXPANSION_ID_LEN    31
+            struct __attribute__((packed))
+            {
+                char ManufacturerCode[3];
+                char SerialNumber[12];
+                char ModelNumber[12];
+                uint16_t SoftwareVersion;
+            } ExpansionID;
+
+
+
+            #define CL_REQU_CMD_POLL                0x02
+            #define CL_REQU_CMD_POLL_LEN            1
+
+            #define CL_REQU_CMD_VEND                0x03
+            #define CL_REQU_SUB_VEND_REQUEST        0x00
+            #define CL_REQU_CMD_VEND_REQUEST_LEN    6
+            struct __attribute__((packed))
+            {
+                uint16_t ItemPrice;
+                uint16_t ItemNumber;
+            } VendRequest;
+
+            #define CL_REQU_SUB_VEND_CANCEL        0x01
+            #define CL_REQU_CMD_VEND_CANCEL_LEN    2
+
+            #define CL_REQU_SUB_VEND_SUCCESS        0x02
+            #define CL_REQU_CMD_VEND_SUCCESS_LEN    4
+            struct __attribute__((packed))
+            {
+                uint16_t ItemNumber;
+            } VendSuccess;
+
+            #define CL_REQU_SUB_VEND_FAILURE        0x03
+            #define CL_REQU_CMD_VEND_FAILURE_LEN    2
+
+            #define CL_REQU_SUB_VEND_SESSION_COMPLETE        0x04
+            #define CL_REQU_CMD_VEND_SESSION_COMPLETE_LEN    2
+
+            #define CL_REQU_CMD_READER              0x04
+            #define CL_REQU_SUB_READER_DISABLE      0x00
+            #define CL_REQU_CMD_READER_DISABLE_LEN  2
+            #define CL_REQU_SUB_READER_ENABLE       0x01
+            #define CL_REQU_CMD_READER_ENABLE_LEN   2
+
+            #define CL_REQU_CMD_REVALUE               0x05
+            #define CL_REQU_SUB_REVALUE_REQUEST       0x00
+            #define CL_REQU_CMD_REVALUE_REQUEST_LEN   4
+            struct __attribute__((packed))
+            {
+                uint16_t RevalueAmount;
+            } RevalueRequest;
+
+            #define CL_REQU_SUB_REVALUE_LIMIT         0x01
+            #define CL_REQU_CMD_REVALUE_LIMIT_LEN     2
+
+        };
+    };
+
+    
+
+} CashLessDataRequest;
+
+
 #endif
