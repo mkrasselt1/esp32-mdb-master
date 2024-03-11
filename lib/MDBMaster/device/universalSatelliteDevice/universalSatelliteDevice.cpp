@@ -40,7 +40,7 @@ void universalSatelliteDevice::onResponse_Setup(MDBResponses::rType responseType
 
 void universalSatelliteDevice::onResponse_Poll(MDBResponses::rType responseType)
 {
-    char tmp[33] = {0};
+    // char tmp[33] = {0};
     if(responseType == MDBResponses::ACK){
         //do nothing
     }

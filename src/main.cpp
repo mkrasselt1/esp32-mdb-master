@@ -1,10 +1,23 @@
 #include <Arduino.h>
-#include <FS.h>
-#include "SPIFFS.h"
 #include <WiFi.h>
-// #include <RingBuf.h>
 #include <functional>
+// LCD over I2C communication
 #include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+LiquidCrystal_I2C lcd(0x27, 20, 4); // 16x2 LCD Display on I2C address 0x27
+void lcdWrite(uint8_t col, uint8_t row, const char *text)
+{
+  char temp[(17 - col)];
+  int8_t textLen = strlen(text);
+  if (!textLen || textLen > 16)
+    textLen = 16;
+  strcpy(temp, text);
+  for (uint8_t x = textLen; x < sizeof(temp) - 1; x++)
+    temp[x] = ' ';
+  temp[sizeof(temp) - 1] = '\0';
+  lcd.setCursor(col, row);
+  lcd.print(temp);
+}
 
 // OTA
 #include <ESPmDNS.h>
@@ -21,9 +34,7 @@ ESPTelnet telnet;
   telnet.println(x); \
   Serial.println(x)
 
-#include <HTTPUpdate.h>
 #include "mdbMaster.h"
-#include "time.h"
 #include "mbedtls/md.h"
 
 #define ST(A) #A
@@ -36,7 +47,6 @@ ESPTelnet telnet;
 SimpleCLI cli;
 
 // Commands
-Command sum;
 Command wifi;
 Command reboot;
 
@@ -50,8 +60,11 @@ uint32_t funds = 0;
 String input = "";
 uint8_t newByte = '\0';
 
-// MDB Function and Callback
+// MDB functions and callback
+// variable containing the product number to be dispensed
 uint8_t dispenser = 0;
+// function to look up the price for the product in question
+
 mdbProduct getProduct(uint16_t productID)
 {
   float price = 0;
@@ -61,17 +74,17 @@ mdbProduct getProduct(uint16_t productID)
 
   // Auswahl Preis nach Produkt
   String prodName = "unbek.";
-  uint16_t numPrices = 0; //cfg_doc["price_list"].size();
+  uint16_t numPrices = 0; // cfg_doc["price_list"].size();
   Serial.printf("%d List entries\r\n", numPrices);
   for (size_t i = 0; i < numPrices; i++)
   {
-    if (0/*cfg_doc["price_list"][i]["Id"]*/ == productID)
+    if (0 /*cfg_doc["price_list"][i]["Id"]*/ == productID)
     {
       printCLI("Price for Product");
-      prodName = "Produkt X";//cfg_doc["price_list"][i]["Name"].as<String>();
+      prodName = "Produkt X"; // cfg_doc["price_list"][i]["Name"].as<String>();
       printCLI(prodName);
       printCLI("is");
-      String prodPrice = "81";//cfg_doc["price_list"][i]["Price"];
+      String prodPrice = "81"; // cfg_doc["price_list"][i]["Price"];
       price = prodPrice.toFloat();
       printCLI(price);
       break;
@@ -85,16 +98,23 @@ mdbProduct getProduct(uint16_t productID)
 class PInterface : public IPayment
 {
 private:
+  // the device staring the session
   IPaymentDevice *sessionDev = nullptr;
+  // selected product with price ans name
   mdbProduct myProduct;
-  uint32_t vendstart = 0;
+  // time of vend start
+  uint32_t vendStart = 0;
+  // array of all mdb devices with funds
   std::vector<IPaymentDevice *> devicesWithFunds;
-  String number = "";
 
-  bool productSelect = false;
+  
+  // product select made by customer
+  bool productSelect = false; //set true when selection was made
+  uint8_t requ_dispenser = 0; //which number of product has been selected
   bool manualProduct = false;
 
 public:
+  // helper function giving the total available credit
   float getTotalFunds()
   {
     float total = 0;
@@ -126,18 +146,22 @@ public:
     }
     return max;
   }
-
+  // event fired when cashless device wants to print something on the screen
   void requestText(IPaymentDevice *dev, char *msg, uint32_t duration)
   {
     printCLI(msg);
-    Serial.printf("for %lums", duration);
-    printCLI(msg);
+    lcdWrite(0, 2, msg);
+    lcdWrite(0, 3, &msg[16]);
+    // TODO: clear the screen after duration
+    Serial.printf("for %llu ms",  duration);
   }
 
+  // event fired when a revalue is requested by a card reader
   void requestRevalue(IPaymentDevice *dev)
   {
   }
 
+  // event fired when a payment session is about to be started by a cashless device
   bool startSession(IPaymentDevice *dev)
   {
     if (sessionDev)
@@ -146,21 +170,29 @@ public:
     printCLI(dev->getDeviceName());
     Serial.printf("\tFunds Available:  %.2f\r\n", dev->getCurrentFunds().getValue());
     sessionDev = dev;
+    lcdWrite(0, 0, "Sitzung aktiv:");
+    char line2[20];
+    sprintf(line2, "Guthaben:  %.2f", dev->getCurrentFunds().getValue());
+    lcdWrite(0, 1, line2);
     return true;
   }
 
+  // event fired when session is ended
   void endSession(IPaymentDevice *dev)
   {
     if (sessionDev)
     {
       productSelect = false;
-      number = "";
       printCLI("End of Session");
       sessionDev = nullptr;
       manualProduct = false;
+      // TODO: tell the user its all wrapped up
+      lcdWrite(0, 0, "Bezahle-Box bereit");
+      lcdWrite(0, 1, "Guthaben:  0.00");
     }
   }
 
+  // event fired when fund changed on the system
   void fundsChanged(IPaymentDevice *dev)
   {
     // if the device has funds, we need to add to list
@@ -179,40 +211,65 @@ public:
         devicesWithFunds.erase(std::find(devicesWithFunds.begin(), devicesWithFunds.end(), dev));
       }
     }
-
+    // For specific device
     Serial.print("Funds changed on ");
     printCLI(dev->getDeviceName());
     Serial.printf("\tFunds Available:  %.2f\r\n", dev->getCurrentFunds().getValue());
-    float funds = getTotalFunds();
+    // end specific device
+
+    // TODO: so something with all the new funds value
+    lcdWrite(0, 0, "Sitzung aktiv:");
+    char line2[20];
+    sprintf(line2, "Guthaben:  %.2f", getTotalFunds());
+    lcdWrite(0, 1, line2);
+
   }
 
+  // event fired when the payment devices authorised the payment
   void vendAccepted(IPaymentDevice *dev, mdbCurrency c)
   {
+    lcdWrite(0, 0, "Kauf genehmigt");
+    char line1[20];
+    sprintf(line1, "Produkt %d Preis %.2f", myProduct.getNumber(), c.getValue());
+    lcdWrite(0, 1, line1);
+    char line2[20];
+    sprintf(line2, "Produkt: %s", myProduct.getName());
+    lcdWrite(0, 2, line2);
+
     Serial.printf("Vend Accepted on %s for %.2f\r\n", dev->getDeviceName(), c.getValue());
-    vendstart = millis();
+    vendStart = millis();
+    
+    //set the dispenser var to start output
     dispenser = myProduct.getNumber();
   }
 
+  // event fired when the payment device denies the vend
   void vendDenied(IPaymentDevice *dev)
   {
+    lcdWrite(0, 0, "Kauf abgelehnt");
+    char line1[20];
+    sprintf(line1, "Produkt %d Preis %.2f", myProduct.getNumber(), myProduct.getPrice()->getValue());
+    lcdWrite(0, 1, line1);
+    char line2[20];
+    sprintf(line2, "Produkt: %s", myProduct.getName());
+    lcdWrite(0, 2, line2);
     Serial.printf("Vend Denied on %s\r\n", dev->getDeviceName());
   }
 
+  //loop function running continuously
   PaymentActions::Action update(IPaymentDevice *dev)
   {
-    uint16_t prod = 0;
-
+    //someone wants their money back - allow?
     if (dev->pendingEscrowRequest())
     {
       return PaymentActions::REQUEST_REVALUE;
     }
+
     if (dev->getCurrentFunds().getValue() > 0)
     {
       // handle product selection
-      uint16_t prod = 0;
       if (productSelect)
       {
-        uint8_t requ_dispenser = 0;
         switch (requ_dispenser)
         {
         case 1: // Peanuts
@@ -231,7 +288,7 @@ public:
           break;
         }
 
-        if ((requ_dispenser < 5) && (myProduct.getPrice()->getValue() <= dev->getCurrentFunds().getValue()))
+        if ((myProduct.getPrice()->getValue() <= dev->getCurrentFunds().getValue()))
         {
           Serial.printf("Requesting Product: %s on %s for %.2f\r\n", myProduct.getName(), dev->getDeviceName(), myProduct.getPrice()->getValue());
           sessionDev = dev;
@@ -247,7 +304,6 @@ public:
           dispenser = 0;
 
           productSelect = false;
-          number = "";
           printCLI("End of Session");
           sessionDev = nullptr;
           manualProduct = false;
@@ -264,7 +320,7 @@ public:
       // handle product selection
       if (productSelect)
       {
-        uint8_t requ_dispenser = 0;
+        //determine which selection means which product
         switch (requ_dispenser)
         {
         case 1: // Peanuts
@@ -307,19 +363,23 @@ public:
     return PaymentActions::NO_ACTION;
   }
 
-  PaymentActions::Action
-  updateDispense(IPaymentDevice *dev)
+  //event fired after vend accept till dispense is dones
+  PaymentActions::Action updateDispense(IPaymentDevice *dev)
   {
     if (dev == sessionDev)
     {
       if (manualProduct)
       {
         // dispenser = 1;
-        if (millis() - vendstart > 1000)
+        if (millis() - vendStart > 1000)
         {
           dispenser = 0;
           return PaymentActions::PRODUCT_DISPENSE_SUCCESS;
+        }else{
+          // if vending failed, do this
+          // return PaymentActions::PRODUCT_DISPENSE_FAILURE;
         }
+
       }
     }
     return PaymentActions::NO_ACTION;
@@ -392,36 +452,6 @@ void MDBRUN(void *args)
     mdbMaster::handleDevices();
     delay(10);
   }
-}
-
-// Callback function for sum command
-void sumCallback(cmd *c)
-{
-  Command cmd(c); // Create wrapper object
-
-  int argNum = cmd.countArgs(); // Get number of arguments
-  int sum = 0;
-
-  // Go through all arguments and add their value up
-  for (int i = 0; i < argNum; i++)
-  {
-    Argument arg = cmd.getArg(i);
-    String argValue = arg.getValue();
-    int argIntValue = argValue.toInt();
-
-    if (argIntValue > 0)
-    {
-      if (i > 0)
-        Serial.print('+');
-      Serial.print(argIntValue);
-
-      sum += argIntValue;
-    }
-  }
-
-  // Print result
-  Serial.print(" = ");
-  printCLI(sum);
 }
 
 void printWiFiStatus()
@@ -545,22 +575,26 @@ void setup()
 
   xTaskCreatePinnedToCore(MDBRUN, "MDB Master Runner", 2048, NULL, 1, NULL, 1);
 
-  // initialize SPIFFS and mount it on /spiffs
-  SPIFFS.begin(true, "/spiffs");
-  delay(3000);
   // Screen and Debug Output
+  lcd.init();      // initialize the lcd
+  lcd.backlight(); // and backlight
+  lcd.clear();     // make it blank
+
   Serial.println("Booting");
   Serial.print("ESP-MDB-Master Interface vers.:");
+  lcdWrite(0, 0, "ESP32-VMC booting");
+
+  lcdWrite(0, 1, STR(CODE_VERSION));
   Serial.println(STR(CODE_VERSION));
 
   // enable cli on serial port
   cli.setOnError(errorCallback); // Set error Callback
-  sum = cli.addBoundlessCommand("sum", sumCallback);
   wifi = cli.addBoundlessCommand("wifi", wifiCallback);
   reboot = cli.addCommand("reboot", rebootCallback);
 
   // wifi connection
   Serial.println("Verbinde WLAN");
+  WiFi.setHostname("ESP32-MDB-Master");
   WiFi.begin();
 
   ArduinoOTA
@@ -624,15 +658,12 @@ void setup()
     else
     {
       //let cli parse it
-      telnet.print("telnet input: \"");
-      telnet.print(str.c_str());
-      telnet.println("\"");
+      printCLI(str);
       cli.parse(str);
       char tmp[300] = "";
       tmp[0] = '\0';
       strcpy(tmp, str.c_str());
       strcat(tmp, "\r\n");
-      printCLI(str);
     } });
 
   DEBUG_INFO;
@@ -683,12 +714,6 @@ void loop()
       printCLI("\"?");
     }
   }
-
-  // if (WiFi.status() == WL_CONNECTED)
-  // {
-  //   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-  //   return;
-  // }
 
   // Handle OTA packets
   ArduinoOTA.handle();
